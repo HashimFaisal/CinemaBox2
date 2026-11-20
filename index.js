@@ -48,7 +48,10 @@ function api(path) {
 }
 
 function normalizeType(value) {
-  return String(value || '').toUpperCase() === 'MOVIE' ? 'movie' : 'series';
+  var type = String(value || '').toUpperCase();
+  if (type === 'MOVIE' || type === 'FILM') return 'movie';
+  if (type === 'TV' || type === 'SERIES' || type === 'SHOW') return 'series';
+  return null;
 }
 
 // دالة آمنة لتنظيف النصوص تدعم العربية بدون استخدام normalize
@@ -135,7 +138,10 @@ function searchCinemaBox(title, type, year) {
           });
           if ((data.results || []).length < 25) return Promise.resolve();
           return fetchPage(pageNum + 1);
-        }).catch(function() { return Promise.resolve(); });
+        }).catch(function (error) {
+          console.warn('[SEARCH PAGE ERROR]', term, 'page', pageNum, error && error.message ? error.message : error);
+          return Promise.resolve();
+        });
       }
 
       return fetchPage(1).then(function () {
