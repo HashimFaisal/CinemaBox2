@@ -264,20 +264,24 @@ function resolveImdbId(id, mediaType) {
 
   var kind = (String(mediaType).toLowerCase() === 'tv' || String(mediaType).toLowerCase() === 'series') ? 'tv' : 'movie';
   var detailsUrl = 'https://api.themoviedb.org/3/' + kind + '/' + encodeURIComponent(value);
+  var key = typeof TMDB_API_KEY !== 'undefined' ? TMDB_API_KEY : '';
 
-  return request(detailsUrl).then(function (data) {
+  if (!key) {
+    console.error('[TMDB] API key is unavailable in plugin runtime');
+    return Promise.resolve(null);
+  }
+
+  var auth = '?api_key=' + encodeURIComponent(key);
+
+  return request(detailsUrl + auth).then(function (data) {
     if (data && data.imdb_id) return data.imdb_id;
 
-    var key = typeof TMDB_API_KEY !== 'undefined' ? TMDB_API_KEY : '';
-    if (!key) return null;
-
-    return request(detailsUrl + '/external_ids?api_key=' + encodeURIComponent(key))
+    return request(detailsUrl + '/external_ids' + auth)
       .then(function (external) {
         return external && external.imdb_id ? external.imdb_id : null;
       });
   });
 }
-
 function fetchStreams(type, id) {
   var episodeId = null;
   var external = parseExternalId(id);
