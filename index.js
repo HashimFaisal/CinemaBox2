@@ -262,12 +262,20 @@ function resolveImdbId(id, mediaType) {
   var value = String(id || '').replace(/^imdb:/i, '');
   if (/^tt\d+$/i.test(value)) return Promise.resolve(value);
 
-  var key = typeof TMDB_API_KEY !== 'undefined' ? TMDB_API_KEY : '';
-  if (!key) return Promise.reject(new Error('TMDB_API_KEY is missing'));
-
   var kind = (String(mediaType).toLowerCase() === 'tv' || String(mediaType).toLowerCase() === 'series') ? 'tv' : 'movie';
-  return request('https://api.themoviedb.org/3/' + kind + '/' + encodeURIComponent(value) + '/external_ids?api_key=' + encodeURIComponent(key))
-    .then(function (data) { return data && data.imdb_id ? data.imdb_id : null; });
+  var detailsUrl = 'https://api.themoviedb.org/3/' + kind + '/' + encodeURIComponent(value);
+
+  return request(detailsUrl).then(function (data) {
+    if (data && data.imdb_id) return data.imdb_id;
+
+    var key = typeof TMDB_API_KEY !== 'undefined' ? TMDB_API_KEY : '';
+    if (!key) return null;
+
+    return request(detailsUrl + '/external_ids?api_key=' + encodeURIComponent(key))
+      .then(function (external) {
+        return external && external.imdb_id ? external.imdb_id : null;
+      });
+  });
 }
 
 function fetchStreams(type, id) {
