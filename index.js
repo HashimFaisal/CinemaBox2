@@ -321,7 +321,8 @@ function fetchStreams(type, id) {
           streams.push({
             name: 'Cinema Box · ' + quality,
             title: quality + ' • Cinema Box',
-            url: video.url
+            url: video.url,
+            quality: quality
           });
         }
       });
