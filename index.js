@@ -354,45 +354,6 @@ function fetchStreams(type, id) {
   });
 }
 
-function fetchDirectCinemaBoxStreams(showId, mediaType, season, episode) {
-  var type = String(mediaType || 'movie').toLowerCase();
-  var isSeries = type === 'tv' || type === 'series';
-  return getDetails(showId).then(function (details) {
-    var episodePromise;
-    if (!isSeries) {
-      episodePromise = Promise.resolve(details.post_info && details.post_info.episode_id);
-    } else {
-      if (season == null || episode == null) return { streams: [] };
-      episodePromise = findEpisode(details, showId, Number(season), Number(episode));
-    }
-    return episodePromise.then(function (episodeId) {
-      if (!episodeId) {
-        console.log('[DIRECT CINEMABOX] No episode ID', showId, season, episode);
-        return { streams: [] };
-      }
-      return getPlayer(episodeId).then(function (player) {
-        var streams = [];
-        (player.videos || []).forEach(function (video) {
-          if (video.url && /^https?:\\/\\//i.test(video.url)) {
-            var quality = video.quality || 'Video';
-            streams.push({
-              name: 'Cinema Box · ' + quality,
-              title: quality + ' • Cinema Box',
-              url: video.url,
-              quality: quality
-            });
-          }
-        });
-        console.log('[DIRECT CINEMABOX STREAMS]', showId, 'episode:', episodeId, 'count:', streams.length);
-        return { streams: streams };
-      });
-    });
-  }).catch(function (error) {
-    console.error('[DIRECT CINEMABOX ERROR]', showId, error && error.message ? error.message : error);
-    return { streams: [] };
-  });
-}
-
 function getStreamsForNuvio(input, mediaType, season, episode) {
   return Promise.resolve().then(function () {
     var args = input && typeof input === 'object'
@@ -401,14 +362,6 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
 
     var rawType = String(args.mediaType || 'movie').toLowerCase();
     var oldType = rawType === 'tv' ? 'series' : rawType;
-    var catalogId = String(args.tmdbId || args.id || '');
-    var directMatch = catalogId.match(/^cinemabox:(\d+)$/i);
-    if (directMatch) {
-      return fetchDirectCinemaBoxStreams(directMatch[1], rawType, args.season, args.episode)
-        .then(function (result) {
-          return Array.isArray(result && result.streams) ? result.streams : [];
-        });
-    }
 
     return resolveImdbId(args.tmdbId, rawType).then(function (imdbId) {
       if (!imdbId) return [];
