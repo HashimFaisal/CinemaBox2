@@ -16,7 +16,8 @@
       "supportedTypes": ["movie", "tv"],
       "enabled": true,
       "hasSettings": false,
-      "supportedPlatforms": ["android", "ios"]
+      "supportedPlatforms": ["android", "ios"],
+      "logo": "https://raw.githubusercontent.com/HashimFaisal/CinemaBox2/main/assets/cinemabox-logo.webp"
     }
   ]
 }
