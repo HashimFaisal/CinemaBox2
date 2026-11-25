@@ -402,7 +402,7 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
     var rawType = String(args.mediaType || 'movie').toLowerCase();
     var oldType = rawType === 'tv' ? 'series' : rawType;
     var catalogId = String(args.tmdbId || args.id || '');
-    var directMatch = catalogId.match(/^cinemabox:(\\d+)$/i);
+    var directMatch = catalogId.match(/^cinemabox:(\d+)$/i);
     if (directMatch) {
       return fetchDirectCinemaBoxStreams(directMatch[1], rawType, args.season, args.episode)
         .then(function (result) {
