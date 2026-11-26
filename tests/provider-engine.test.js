@@ -8,6 +8,9 @@ test('normalizes qualities and rejects unsafe URLs', () => {
   const provider = { id: 'primary', name: 'CinemaBox' };
   assert.equal(normalizeStream({ url: 'javascript:alert(1)' }, provider), null);
   assert.equal(validHttpUrl('https://cdn.example/video.mp4?token=a%2Fb'), true);
+  assert.equal(validHttpUrl('https:///missing-host.mp4'), false);
+  assert.equal(validHttpUrl('https://'), false);
+  assert.equal(validHttpUrl('https://user:pass@cdn.example/video.mp4'), false);
   assert.equal(normalizeStream({ url: 'https://cdn.example/a.mp4', quality: '4K HDR' }, provider).quality, '2160p HDR');
 });
 
