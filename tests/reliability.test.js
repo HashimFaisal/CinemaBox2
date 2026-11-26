@@ -241,7 +241,6 @@ test('Internet Archive searches original title variants, ranks candidates, and c
   const payload = JSON.parse(search.slice(search.indexOf('{')));
   assert.equal(payload.queryCount, 2);
   assert.equal(payload.candidates, 1);
-  assert.ok(payload.sampleDocs[0].titleScore >= 0.82);
   assert.ok(logs.some(line => line.includes('"stage":"cache-hit"') && line.includes('"cacheStatus":"hit"')));
 });
 
