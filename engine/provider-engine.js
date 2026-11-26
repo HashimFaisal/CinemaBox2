@@ -139,6 +139,10 @@ function createProviderEngine(options) {
     streams.sort((a, b) => {
       const rank = qualityRank(b.quality) - qualityRank(a.quality);
       if (rank) return rank;
+      const pa = providers.find(item => item.id === a.providerId);
+      const pb = providers.find(item => item.id === b.providerId);
+      const priorityDifference = Number(pb && pb.priority || 0) - Number(pa && pa.priority || 0);
+      if (priorityDifference) return priorityDifference;
       const ha = health.get(a.providerId);
       const hb = health.get(b.providerId);
       const rateA = ha && ha.attempts ? ha.successes / ha.attempts : 0.5;
@@ -146,10 +150,7 @@ function createProviderEngine(options) {
       if (rateB !== rateA) return rateB - rateA;
       const latencyA = ha && ha.latencyEwmaMs != null ? ha.latencyEwmaMs : Infinity;
       const latencyB = hb && hb.latencyEwmaMs != null ? hb.latencyEwmaMs : Infinity;
-      if (latencyA !== latencyB) return latencyA - latencyB;
-      const pa = providers.find(item => item.id === a.providerId);
-      const pb = providers.find(item => item.id === b.providerId);
-      return Number(pb && pb.priority || 0) - Number(pa && pa.priority || 0);
+      return latencyA - latencyB;
     });
     return { streams: streams, providers: results };
   }
