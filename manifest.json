@@ -1,7 +1,7 @@
 {
   "id": "cinemabox-next-test",
   "name": "CinemaBox Next (Test)",
-  "version": "2.1.7-next.8",
+  "version": "2.1.7-next.9",
   "description": "Experimental CinemaBox Next Engine test build. Not an official release.",
   "author": "HashimFaisal",
   "logo": "https://cinema.albox.co/favicon.ico",
@@ -14,7 +14,7 @@
       "id": "cinemabox-next-test",
       "name": "CinemaBox Next (Test)",
       "description": "Experimental provider-engine validation build",
-      "version": "2.1.7-next.8",
+      "version": "2.1.7-next.9",
       "filename": "index.js",
       "supportedTypes": [
         "movie",
