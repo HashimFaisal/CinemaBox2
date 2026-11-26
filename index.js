@@ -37,6 +37,16 @@ function cached(key, loader, ttl) {
   return value;
 }
 
+function uniqueStreamVideos(videos) {
+  var seen = new Set();
+  return (Array.isArray(videos) ? videos : []).filter(function (video) {
+    if (!video || typeof video.url !== 'string' || !/^https?:\\/\\//i.test(video.url)) return false;
+    if (seen.has(video.url)) return false;
+    seen.add(video.url);
+    return true;
+  });
+}
+
 function request(url) {
   return fetch(url, {
     headers: {
@@ -496,19 +506,14 @@ function fetchStreams(type, id, suppliedMeta) {
           'validHttpUrl:', validUrl,
           'quality:', video && video.quality ? video.quality : 'unknown');
       });
-      var seenStreamUrls = new Set();
-      playerVideos.forEach(function (video) {
-        if (video && typeof video.url === 'string' && /^https?:\/\//i.test(video.url) &&
-            !seenStreamUrls.has(video.url)) {
-          seenStreamUrls.add(video.url);
-          var quality = video.quality || 'Video';
-          var streamLabel = 'CinemaBox (' + displayTitle + ') ' + quality;
-          streams.push({
-            name: streamLabel,
-            title: streamLabel,
-            url: video.url
-          });
-        }
+      uniqueStreamVideos(playerVideos).forEach(function (video) {
+        var quality = video.quality || 'Video';
+        var streamLabel = 'CinemaBox (' + displayTitle + ') ' + quality;
+        streams.push({
+          name: streamLabel,
+          title: streamLabel,
+          url: video.url
+        });
       });
       console.log('[STREAMS]', type, id, 'episode:', episodeId, 'count:', streams.length, 'total:', Date.now() - timingStart, 'ms');
       return { streams: streams };
