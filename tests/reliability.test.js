@@ -13,6 +13,9 @@ function loadInternals(fetchImpl, logger) {
     URL,
     module: { exports: {} },
     fetch: fetchImpl,
+    setTimeout,
+    clearTimeout,
+    AbortController,
     TMDB_API_KEY: 'test-secret-key',
     console: logger || { log() {}, error() {} }
   };
@@ -811,4 +814,40 @@ test('Nuvio entry point emits an error-level runtime marker before early exits',
   assert.equal(payload.id, '90228');
   assert.equal(payload.season, -1);
   assert.equal(payload.episode, -1);
+});
+
+test('HTTP requests abort when the shared provider deadline expires', async () => {
+  let aborted = false;
+  const api = loadInternals((url, options) => new Promise((resolve, reject) => {
+    assert.ok(options && options.signal, 'request should pass an AbortSignal');
+    options.signal.addEventListener('abort', () => {
+      aborted = true;
+      const error = new Error('request aborted');
+      error.name = 'AbortError';
+      reject(error);
+    });
+  }));
+
+  await assert.rejects(
+    api.request('https://slow.example.test/resource', Date.now() + 25),
+    /HTTP request timed out before provider deadline/
+  );
+  assert.equal(aborted, true, 'the in-flight fetch should be aborted at the deadline');
+});
+
+test('HTTP request deadline is shared with the caller and expired deadlines do not start fetch', async () => {
+  let calls = 0;
+  const api = loadInternals(() => {
+    calls++;
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve('{}')
+    });
+  });
+
+  await assert.rejects(
+    api.request('https://example.test/resource', Date.now() - 1),
+    /time budget exceeded/
+  );
+  assert.equal(calls, 0);
 });
