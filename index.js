@@ -90,6 +90,7 @@ function normalizeTitle(value) {
     .replace(/[أإآ]/g, 'ا')
     .replace(/ة/g, 'ه')
     .replace(/ى/g, 'ي')
+    .replace(/[\\u064B-\\u065F\\u0670\\u0640]/g, '')
     .replace(/&/g, ' and ')
     .replace(/[^a-z0-9\u0600-\u06ff]+/g, ' ')
     .trim()
