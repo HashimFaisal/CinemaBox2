@@ -1183,11 +1183,11 @@ function createInternetArchiveProvider(options) {
   function trace(stage, details) {
     const payload = Object.assign({ stage: stage, provider: 'internet-archive' }, details || {});
     const message = '[INTERNET ARCHIVE DIAGNOSTIC] ' + JSON.stringify(payload);
-    // Nuvio reliably surfaces console.error in its plugin runtime logs.
-    // Keep diagnostics structured and non-throwing; fall back for test/older runtimes.
-    if (logger && typeof logger.error === 'function') logger.error(message);
+    // Nuvio's shared scraper traces are emitted through console.log (Log.d).
+    // Prefer that channel so diagnostics appear alongside HTTP/search traces.
+    if (logger && typeof logger.log === 'function') logger.log(message);
     else if (logger && typeof logger.warn === 'function') logger.warn(message);
-    else if (logger && typeof logger.log === 'function') logger.log(message);
+    else if (logger && typeof logger.error === 'function') logger.error(message);
   }
 
   async function getJson(url) {
