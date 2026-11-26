@@ -11,6 +11,9 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
 function loadSearch(fetchImpl) {
   const sandbox = {
     URL,
+    setTimeout,
+    clearTimeout,
+    AbortController,
     module: { exports: {} },
     fetch: fetchImpl,
     console: { log() {}, error() {} }
