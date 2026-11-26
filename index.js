@@ -1182,7 +1182,11 @@ function createInternetArchiveProvider(options) {
 
   function trace(stage, details) {
     const payload = Object.assign({ stage: stage, provider: 'internet-archive' }, details || {});
-    logger.log('[INTERNET ARCHIVE DIAGNOSTIC]', JSON.stringify(payload));
+    const message = '[INTERNET ARCHIVE DIAGNOSTIC] ' + JSON.stringify(payload);
+    // Nuvio may suppress plugin console.log output; warning-level messages are
+    // surfaced by its runtime logger while remaining non-fatal diagnostics.
+    if (logger && typeof logger.warn === 'function') logger.warn(message);
+    else if (logger && typeof logger.log === 'function') logger.log(message);
   }
 
   async function getJson(url) {
