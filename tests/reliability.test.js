@@ -16,7 +16,7 @@ function loadInternals(fetchImpl) {
     console: { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, uniqueStreamVideos, normalizeTitle, titleScore };',
+    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, uniqueStreamVideos, normalizeTitle, titleScore, findEpisode, buildStream };',
     sandbox,
     { filename: 'index.js' }
   );
@@ -137,4 +137,51 @@ test('Arabic title normalization ignores diacritics and tatweel', () => {
   assert.equal(api.normalizeTitle('الْمَاتْرِكْس'), api.normalizeTitle('الماتركس'));
   assert.equal(api.titleScore('الْمَاتْرِكْس', 'الماتركس'), 1);
   assert.equal(api.normalizeTitle('مــاتريكس'), api.normalizeTitle('ماتريكس'));
+});
+
+
+test('stream objects expose quality as a separate Nuvio field', () => {
+  const api = loadInternals(() => {});
+  const stream = api.buildStream({
+    url: 'https://cdn.example/1080p.mp4',
+    quality: '1080p'
+  }, 'The Flash S02E05');
+
+  assert.equal(stream.quality, '1080p');
+  assert.match(stream.name, /1080p/);
+  assert.match(stream.title, /1080p/);
+  assert.equal(stream.url, 'https://cdn.example/1080p.mp4');
+});
+
+test('episode lookup fetches season details only when requested season differs', async () => {
+  const requests = [];
+  const api = loadInternals((url) => {
+    requests.push(url);
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({
+        post_info: { season_number: 2 },
+        sections: [{
+          section_type: 'episodes',
+          data: [{ id: 'episode-201', card_type: 'episode', description: '1' }]
+        }]
+      }))
+    });
+  });
+
+  const showDetails = {
+    post_info: { season_number: 1 },
+    sections: [{
+      data: [{ id: 'season-2-id', card_type: 'seasonposter', title: 'Season 2' }]
+    }]
+  };
+
+  const seasonOneEpisode = await api.findEpisode(showDetails, 'show-123', 1, 1);
+  assert.equal(seasonOneEpisode, undefined);
+  assert.equal(requests.length, 0, 'current season should reuse the initial details response');
+
+  const seasonTwoEpisode = await api.findEpisode(showDetails, 'show-123', 2, 1);
+  assert.equal(seasonTwoEpisode, 'episode-201');
+  assert.equal(requests.length, 1, 'a different season should trigger exactly one details request');
+  assert.match(requests[0], /season_id=season-2-id/);
 });
