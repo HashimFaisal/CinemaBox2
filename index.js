@@ -22,6 +22,12 @@ var createProviderEngine = (function () {
   
   function validHttpUrl(value) {
     if (typeof value !== 'string' || !value || value !== value.trim() || /\s|\\/.test(value)) return false;
+    const protocolEnd = value.indexOf('://');
+    if (protocolEnd < 0) return false;
+    const protocol = value.slice(0, protocolEnd).toLowerCase();
+    if (protocol !== 'http' && protocol !== 'https') return false;
+    const authority = value.slice(protocolEnd + 3).split(/[/?#]/, 1)[0];
+    if (!authority) return false;
     try {
       const parsed = new URL(value);
       return (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
@@ -856,6 +862,7 @@ function resolveImdbId(id, mediaType, deadline) {
   });
 }
 function buildStream(video, displayTitle) {
+  if (!video || !validateStreamUrl(video.url)) return null;
   var quality = normalizeQuality(video.quality);
   var streamLabel = 'CinemaBox (' + displayTitle + ') ' + quality;
   return {
@@ -991,6 +998,7 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
       });
       uniqueStreamVideos(playerVideos).forEach(function (video) {
         var stream = buildStream(video, displayTitle);
+        if (!stream) return;
         streams.push(stream);
         qualityCounts[stream.quality] = (qualityCounts[stream.quality] || 0) + 1;
       });
