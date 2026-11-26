@@ -12,11 +12,18 @@ function redactSensitive(value) {
 }
 
 const cache = new Map();
+const CACHE_MAX_ENTRIES = 500;
 
 function cached(key, loader, ttl) {
   if (ttl == null) ttl = 120000;
   const old = cache.get(key);
-  if (old && Date.now() - old.time < ttl) return old.value;
+  if (old && Date.now() - old.time < ttl) {
+    // Refresh insertion order so frequently used entries stay in the LRU window.
+    cache.delete(key);
+    cache.set(key, old);
+    return old.value;
+  }
+  if (old) cache.delete(key);
 
   const value = Promise.resolve().then(loader).catch(function (error) {
     cache.delete(key);
@@ -24,6 +31,9 @@ function cached(key, loader, ttl) {
   });
 
   cache.set(key, { time: Date.now(), value: value });
+  while (cache.size > CACHE_MAX_ENTRIES) {
+    cache.delete(cache.keys().next().value);
+  }
   return value;
 }
 
@@ -486,8 +496,11 @@ function fetchStreams(type, id, suppliedMeta) {
           'validHttpUrl:', validUrl,
           'quality:', video && video.quality ? video.quality : 'unknown');
       });
+      var seenStreamUrls = new Set();
       playerVideos.forEach(function (video) {
-        if (video && typeof video.url === 'string' && /^https?:\/\//i.test(video.url)) {
+        if (video && typeof video.url === 'string' && /^https?:\\/\\//i.test(video.url) &&
+            !seenStreamUrls.has(video.url)) {
+          seenStreamUrls.add(video.url);
           var quality = video.quality || 'Video';
           var streamLabel = 'CinemaBox (' + displayTitle + ') ' + quality;
           streams.push({
