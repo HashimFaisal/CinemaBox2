@@ -1,14 +1,23 @@
 # CinemaBox Next Engine — provider core
 
-The provider orchestration core is now connected to the existing CinemaBox resolution path on this experimental branch.
+The provider orchestration core is connected to the existing CinemaBox resolution path on this experimental branch.
 
 ## Runtime integration
 
-- `cinemabox` is the first and currently only verified provider.
-- The existing metadata, title matching, season/episode resolution, details lookup, player lookup, cache, and diagnostics remain in place.
-- The provider adapter receives the existing resolved IMDb ID, media type, metadata, and absolute deadline.
-- The engine returns normalized streams, then the adapter maps them back to the exact four-field stream object expected by the current Nuvio integration: `name`, `title`, `url`, and `quality`.
-- The engine core is bundled into `index.js` because the manifest points Nuvio directly at a single entry file; the standalone `engine/provider-engine.js` remains available for focused unit tests. Keep the bundled implementation and standalone module synchronized.
+- `cinemabox` is the first verified provider.
+- Existing metadata, title matching, season/episode resolution, details/player lookup, cache, and diagnostics remain in place.
+- The adapter receives the existing resolved IMDb ID, media type, metadata, and absolute deadline.
+- Results are normalized internally, then mapped back to the exact four-field Nuvio stream object: `name`, `title`, `url`, and `quality`.
+- The engine is bundled into `index.js` because the manifest loads a single entry file. Keep the standalone engine module and bundled implementation synchronized.
+
+## Phase 3 — Internet Archive adapter
+
+- Added a separate `providers/internet-archive.js` adapter using the documented Archive.org Advanced Search and Item Metadata read APIs.
+- It only searches movies, requires exact normalized title and compatible year, and only emits direct media files when the item explicitly declares a Public Domain or CC0 rights marker.
+- It filters out non-video files, private files, unsafe filenames, and items without an explicit permitted rights marker.
+- It is registered in the provider engine but remains **disabled by default** via `ENABLE_INTERNET_ARCHIVE_PROVIDER = false`.
+- Its provider-specific timeout is 5 seconds, so enabling it cannot consume the full CinemaBox request budget.
+- It does not scrape third-party torrent sites or treat CinemaBox's multiple quality links as separate providers.
 
 ## Provider engine capabilities
 
@@ -20,8 +29,8 @@ The provider orchestration core is now connected to the existing CinemaBox resol
 - quality-first sorting and provider priority tie-break
 - per-provider failure counters and cooldown circuit breaker
 
-## Boundaries and next steps
+## Validation and release boundary
 
-No additional source provider or scraper has been added. Do not interpret multiple quality links returned by CinemaBox as independent providers. A new provider must be independently verified, permitted, and covered by provider contract tests before it is enabled.
+Provider contract tests use mocked Archive.org responses and verify title/year matching, file filtering, and rights checks. They do not claim live availability or real-device playback.
 
-This branch is experimental. The official `main` version 2.1.7, manifest, and release metadata remain unchanged. Nuvio in-app playback still needs a real-device validation before this work is considered ready for release.
+This branch is experimental. The official `main` version 2.1.7, manifest, releases, and tags remain unchanged. Internet Archive stays opt-in until its result quality and playback are verified in Nuvio.
