@@ -1149,121 +1149,211 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
 }
 
 // Internet Archive adapter: only explicit Public Domain / CC0 records are eligible.
+// Search follows a Torrentio-inspired discovery pattern (multiple indexed queries,
+// candidate ranking, short negative cache) without requiring a separate backend.
 function normalize(value) {
-  return String(value || '').toLowerCase()
-    .replace(/[’']/g, '')
-    .replace(/&/g, ' and ')
-    .replace(/[^a-z0-9\u0600-\u06ff]+/g, ' ')
-    .trim().replace(/\s+/g, ' ');
+  return normalizeTitle(value);
 }
 
 function yearOf(value) {
-  const match = String(value || '').match(/\b(19|20)\d{2}\b/);
+  const match = String(value || '').match(/\\b(19|20)\\d{2}\\b/);
   return match ? match[0] : '';
+}
+
+function titleSimilarity(left, right) {
+  const a = normalize(left);
+  const b = normalize(right);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const aWords = Array.from(new Set(a.split(' ')));
+  const bWords = Array.from(new Set(b.split(' ')));
+  const common = aWords.filter(function (word) { return bWords.indexOf(word) !== -1; }).length;
+  return (2 * common) / (aWords.length + bWords.length);
 }
 
 function isPermittedLicense(metadata) {
   const license = String(metadata && (metadata.licenseurl || metadata.license_url) || '').toLowerCase();
   const rights = String(metadata && metadata.rights || '').toLowerCase();
-  return /creativecommons\.org\/publicdomain\/(?:mark|zero)\/1\.0/.test(license) ||
+  return /creativecommons\\.org\\/publicdomain\\/(?:mark|zero)\\/1\\.0/.test(license) ||
     /public domain/.test(rights);
 }
 
 function qualityOf(filename) {
-  const match = String(filename || '').match(/(?:^|[._\s-])(2160|1440|1080|720|480|360)p(?:[._\s-]|$)/i);
+  const match = String(filename || '').match(/(?:^|[._\\s-])(2160|1440|1080|720|480|360)p(?:[._\\s-]|$)/i);
   return match ? match[1] + 'p' : 'Video';
 }
+
+const INTERNET_ARCHIVE_CACHE = new Map();
+const INTERNET_ARCHIVE_CACHE_MAX = 200;
+const INTERNET_ARCHIVE_CACHE_TTL_MS = 10 * 60 * 1000;
+const INTERNET_ARCHIVE_EMPTY_CACHE_TTL_MS = 45 * 1000;
 
 function createInternetArchiveProvider(options) {
   const config = options || {};
   const fetchImpl = config.fetch || (typeof fetch === 'function' ? fetch : null);
   const maxResults = Math.max(1, Math.min(5, Number(config.maxResults) || 3));
+  const maxCandidates = Math.max(maxResults, Math.min(10, Number(config.maxCandidates) || 8));
+  const maxSearchQueries = Math.max(1, Math.min(5, Number(config.maxSearchQueries) || 4));
   const logger = config.console || console;
 
   function trace(stage, details) {
     const payload = Object.assign({ stage: stage, provider: 'internet-archive' }, details || {});
     const message = '[INTERNET ARCHIVE DIAGNOSTIC] ' + JSON.stringify(payload);
-    // Emit diagnostics at error level so they remain visible in filtered Nuvio logs.
-    // Fall back to warn/log for runtimes that do not expose the higher-priority methods.
     if (logger && typeof logger.error === 'function') logger.error(message);
     else if (logger && typeof logger.warn === 'function') logger.warn(message);
     else if (logger && typeof logger.log === 'function') logger.log(message);
   }
 
-  async function getJson(url) {
+  async function getJson(url, deadline) {
+    ensureBudget(deadline, 'Internet Archive request');
     if (!fetchImpl) throw new Error('Internet Archive fetch is unavailable');
     const response = await fetchImpl(url, { headers: { Accept: 'application/json' } });
     if (!response || !response.ok) throw new Error('Internet Archive HTTP ' + (response && response.status || 'error'));
-    return response.json ? response.json() : JSON.parse(await response.text());
+    const data = response.json ? await response.json() : JSON.parse(await response.text());
+    ensureBudget(deadline, 'Internet Archive response processing');
+    return data;
   }
 
-  async function getStreams(context) {
-    const startedAt = Date.now();
-    const input = context || {};
-    if (String(input.type || '').toLowerCase() !== 'movie') {
-      trace('skipped', { reason: 'unsupported-media-type', mediaType: String(input.type || 'unknown') });
-      return [];
-    }
-    const meta = input.meta || {};
-    const title = String(meta.name || meta.title || meta.original_name || '').trim();
-    if (!title) {
-      trace('skipped', { reason: 'missing-title' });
-      return [];
-    }
-
-    const year = yearOf(meta.year || meta.release_date);
-    const escapedTitle = title.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const query = 'mediatype:movies AND title:"' + escapedTitle + '"';
-    const searchUrl = 'https://archive.org/advancedsearch.php?q=' + encodeURIComponent(query) +
-      '&fl[]=identifier&fl[]=title&fl[]=year&fl[]=licenseurl&rows=' + maxResults + '&page=1&output=json';
-    let search;
-    try {
-      trace('search-start', { year: year || null, maxResults: maxResults });
-      search = await getJson(searchUrl);
-    } catch (error) {
-      trace('error', { stage: 'search', elapsedMs: Date.now() - startedAt, message: String(error && error.message || error) });
-      throw error;
-    }
-    const responseObject = search && search.response && typeof search.response === 'object'
-      ? search.response : null;
-    const docs = responseObject && Array.isArray(responseObject.docs) ? responseObject.docs : [];
-    const docsField = responseObject ? responseObject.docs : null;
-    const searchShape = {
-      topLevelKeys: search && typeof search === 'object' ? Object.keys(search).slice(0, 12) : [],
-      responseKeys: responseObject ? Object.keys(responseObject).slice(0, 16) : [],
-      docsFieldType: Array.isArray(docsField) ? 'array' : (docsField === null ? 'missing-or-null' : typeof docsField),
-      responseError: search && (search.error || search.errors || search.exception)
-        ? String(search.error || search.errors || search.exception).slice(0, 300) : null,
-      responseMessage: responseObject && (responseObject.message || responseObject.error)
-        ? String(responseObject.message || responseObject.error).slice(0, 300) : null
-    };
-    const filtered = { missingIdentifier: 0, titleMismatch: 0, yearMismatch: 0 };
-    const candidates = [];
-    docs.forEach(function (doc) {
-      if (!doc || !doc.identifier) { filtered.missingIdentifier += 1; return; }
-      if (normalize(doc.title) !== normalize(title)) { filtered.titleMismatch += 1; return; }
-      const candidateYear = yearOf(doc.year);
-      if (year && candidateYear && year !== candidateYear) { filtered.yearMismatch += 1; return; }
-      candidates.push(doc);
+  function getTitleVariants(meta, title) {
+    const values = [
+      title, meta.original_title, meta.original_name, meta.title,
+      meta.alternative_title, meta.alternate_title, meta.aka
+    ];
+    [meta.alternate_titles, meta.aliases, meta.alt_titles].forEach(function (list) {
+      if (Array.isArray(list)) values.push.apply(values, list);
     });
-    const selectedCandidates = candidates.slice(0, maxResults);
+    const seen = new Set();
+    return values.map(function (value) { return String(value || '').trim(); })
+      .filter(function (value) {
+        const key = normalize(value);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, maxSearchQueries);
+  }
+
+  function cacheKey(type, variants, year) {
+    return 'movie|' + variants.map(normalize).sort().join('|') + '|' + (year || '');
+  }
+
+  function cacheResult(key, promise) {
+    const existing = INTERNET_ARCHIVE_CACHE.get(key);
+    if (existing && existing.expiresAt > Date.now()) {
+      trace('cache-hit', { cacheStatus: existing.streams.length ? 'hit' : 'negative-hit', streams: existing.streams.length });
+      return Promise.resolve(existing.streams.slice());
+    }
+    if (existing && existing.pending) {
+      trace('cache-hit', { cacheStatus: 'in-flight' });
+      return existing.pending.then(function (streams) { return streams.slice(); });
+    }
+    const entry = { expiresAt: 0, streams: [], pending: null };
+    entry.pending = promise.then(function (streams) {
+      entry.streams = Array.isArray(streams) ? streams.slice() : [];
+      entry.expiresAt = Date.now() + (entry.streams.length ? INTERNET_ARCHIVE_CACHE_TTL_MS : INTERNET_ARCHIVE_EMPTY_CACHE_TTL_MS);
+      entry.pending = null;
+      while (INTERNET_ARCHIVE_CACHE.size > INTERNET_ARCHIVE_CACHE_MAX) {
+        const oldestKey = INTERNET_ARCHIVE_CACHE.keys().next().value;
+        if (oldestKey === key && INTERNET_ARCHIVE_CACHE.size === 1) break;
+        INTERNET_ARCHIVE_CACHE.delete(oldestKey);
+      }
+      return entry.streams.slice();
+    }).catch(function (error) {
+      if (INTERNET_ARCHIVE_CACHE.get(key) === entry) INTERNET_ARCHIVE_CACHE.delete(key);
+      throw error;
+    });
+    INTERNET_ARCHIVE_CACHE.set(key, entry);
+    return entry.pending;
+  }
+
+  async function discoverCandidates(variants, year, deadline) {
+    const found = new Map();
+    const querySummaries = [];
+    const escaped = variants.map(function (value) {
+      return value.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\"');
+    });
+    const requests = escaped.map(function (value, index) {
+      const query = 'mediatype:movies AND title:"' + value + '"';
+      const url = 'https://archive.org/advancedsearch.php?q=' + encodeURIComponent(query) +
+        '&fl[]=identifier&fl[]=title&fl[]=year&fl[]=licenseurl&fl[]=downloads&rows=25&page=1&output=json';
+      return getJson(url, deadline).then(function (search) {
+        const responseObject = search && search.response && typeof search.response === 'object' ? search.response : null;
+        const docs = responseObject && Array.isArray(responseObject.docs) ? responseObject.docs : [];
+        querySummaries.push({
+          queryIndex: index,
+          queryTitle: variants[index],
+          reportedTotal: responseObject && Number.isFinite(Number(responseObject.numFound)) ? Number(responseObject.numFound) : null,
+          rawResults: docs.length,
+          responseError: search && (search.error || search.errors || search.exception)
+            ? String(search.error || search.errors || search.exception).slice(0, 200) : null
+        });
+        docs.forEach(function (doc) {
+          if (!doc || !doc.identifier) return;
+          const id = String(doc.identifier);
+          const previous = found.get(id);
+          const score = variants.reduce(function (best, variant) {
+            return Math.max(best, titleSimilarity(variant, doc.title));
+          }, 0);
+          const candidate = { doc: doc, score: score, queryIndex: index };
+          if (!previous || candidate.score > previous.score) found.set(id, candidate);
+        });
+      }).catch(function (error) {
+        querySummaries.push({
+          queryIndex: index,
+          queryTitle: variants[index],
+          rawResults: 0,
+          requestError: String(error && error.message || error).slice(0, 200)
+        });
+      });
+    });
+    await Promise.all(requests);
+
+    const filtered = { missingIdentifier: 0, titleMismatch: 0, yearMismatch: 0, lowTitleConfidence: 0 };
+    const candidates = [];
+    const docs = Array.from(found.values());
+    docs.forEach(function (entry) {
+      const doc = entry.doc;
+      if (!doc || !doc.identifier) { filtered.missingIdentifier += 1; return; }
+      if (entry.score < 0.82) { filtered.lowTitleConfidence += 1; filtered.titleMismatch += 1; return; }
+      const candidateYear = yearOf(doc.year);
+      if (year && candidateYear && candidateYear !== '1900' && year !== candidateYear) {
+        filtered.yearMismatch += 1;
+        return;
+      }
+      candidates.push({
+        doc: doc,
+        score: entry.score,
+        yearMatch: year && candidateYear === year ? 1 : 0,
+        downloads: Number(doc.downloads) || 0
+      });
+    });
+    candidates.sort(function (a, b) {
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.yearMatch !== a.yearMatch) return b.yearMatch - a.yearMatch;
+      return b.downloads - a.downloads;
+    });
     trace('search-complete', {
-      query: query,
-      reportedTotal: responseObject && Number.isFinite(Number(responseObject.numFound))
-        ? Number(responseObject.numFound) : null,
+      queryCount: variants.length,
+      queries: querySummaries,
+      reportedTotal: querySummaries.reduce(function (sum, item) { return sum + (Number(item.reportedTotal) || 0); }, 0),
       rawResults: docs.length,
-      searchShape: searchShape,
-      sampleDocs: docs.slice(0, 5).map(function (doc) {
+      sampleDocs: docs.slice(0, 5).map(function (entry) {
         return {
-          identifier: doc && doc.identifier ? String(doc.identifier) : null,
-          title: doc && doc.title ? String(doc.title) : null,
-          year: doc && doc.year ? String(doc.year) : null
+          identifier: String(entry.doc.identifier),
+          title: String(entry.doc.title || ''),
+          year: String(entry.doc.year || ''),
+          titleScore: Number(entry.score.toFixed(2))
         };
       }),
-      candidates: selectedCandidates.length,
+      candidates: candidates.length,
       filtered: filtered
     });
+    return candidates.slice(0, maxCandidates).map(function (entry) { return entry.doc; });
+  }
 
+  async function loadStreams(input, title, variants, year) {
+    const startedAt = Date.now();
+    const deadline = Number.isFinite(input.deadline) ? input.deadline : Infinity;
+    const selectedCandidates = await discoverCandidates(variants, year, deadline);
     const streams = [];
     const rejected = {
       metadataUnavailable: 0,
@@ -1279,25 +1369,32 @@ function createInternetArchiveProvider(options) {
     let metadataRecords = 0;
     let filesInspected = 0;
     let playableFiles = 0;
+
     for (const doc of selectedCandidates) {
+      ensureBudget(deadline, 'Internet Archive metadata');
       const metadataUrl = 'https://archive.org/metadata/' + encodeURIComponent(doc.identifier);
       let record;
       try {
-        record = await getJson(metadataUrl);
+        record = await getJson(metadataUrl, deadline);
         metadataRecords += 1;
       } catch (error) {
         rejected.metadataUnavailable += 1;
-        trace('metadata-error', {
-          recordsFetched: metadataRecords,
-          message: String(error && error.message || error)
-        });
+        trace('metadata-error', { identifier: String(doc.identifier), recordsFetched: metadataRecords,
+          message: String(error && error.message || error).slice(0, 200) });
         continue;
       }
       const metadata = record && record.metadata || {};
       if (!isPermittedLicense(metadata)) { rejected.licenseNotPermitted += 1; continue; }
-      if (normalize(metadata.title || doc.title) !== normalize(title)) { rejected.metadataTitleMismatch += 1; continue; }
+      const metadataTitle = metadata.title || doc.title || '';
+      const metadataScore = variants.reduce(function (best, variant) {
+        return Math.max(best, titleSimilarity(variant, metadataTitle));
+      }, 0);
+      if (metadataScore < 0.82) { rejected.metadataTitleMismatch += 1; continue; }
       const recordYear = yearOf(metadata.year || metadata.date || doc.year);
-      if (year && recordYear && year !== recordYear) { rejected.metadataYearMismatch += 1; continue; }
+      if (year && recordYear && recordYear !== '1900' && year !== recordYear) {
+        rejected.metadataYearMismatch += 1;
+        continue;
+      }
 
       const files = Array.isArray(record.files) ? record.files : [];
       if (!files.length) rejected.noFiles += 1;
@@ -1308,7 +1405,7 @@ function createInternetArchiveProvider(options) {
           rejected.invalidFileName += 1;
           return;
         }
-        if (!/\.(?:mp4|m4v|webm|ogv)$/i.test(file.name)) {
+        if (!/\\.(?:mp4|m4v|webm|ogv)$/i.test(file.name)) {
           rejected.unsupportedMedia += 1;
           return;
         }
@@ -1340,7 +1437,7 @@ function createInternetArchiveProvider(options) {
     }
     const result = streams.slice(0, 3);
     trace('complete', {
-      rawResults: docs.length,
+      rawResults: null,
       candidates: selectedCandidates.length,
       metadataRecords: metadataRecords,
       filesInspected: filesInspected,
@@ -1352,6 +1449,30 @@ function createInternetArchiveProvider(options) {
     return result;
   }
 
+  async function getStreams(context) {
+    const input = context || {};
+    if (String(input.type || '').toLowerCase() !== 'movie') {
+      trace('skipped', { reason: 'unsupported-media-type', mediaType: String(input.type || 'unknown') });
+      return [];
+    }
+    const meta = input.meta || {};
+    const title = String(meta.name || meta.title || meta.original_name || '').trim();
+    if (!title) {
+      trace('skipped', { reason: 'missing-title' });
+      return [];
+    }
+    const year = yearOf(meta.year || meta.release_date);
+    const variants = getTitleVariants(meta, title);
+    const key = cacheKey('movie', variants, year);
+    trace('search-start', { year: year || null, queryCount: variants.length, maxCandidates: maxCandidates });
+    try {
+      return await cacheResult(key, loadStreams(input, title, variants, year));
+    } catch (error) {
+      trace('error', { stage: 'search-or-metadata', elapsedMs: Date.now(), message: String(error && error.message || error).slice(0, 250) });
+      throw error;
+    }
+  }
+
   return {
     id: 'internet-archive',
     name: 'Internet Archive',
@@ -1361,7 +1482,6 @@ function createInternetArchiveProvider(options) {
     getStreams: getStreams
   };
 }
-
 
 var ENABLE_INTERNET_ARCHIVE_PROVIDER = true;
 
