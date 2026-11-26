@@ -488,17 +488,7 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
     var year = releaseYear(meta.year);
     
     ensureBudget(deadline, 'primary title search');
-    return searchCinemaBox(meta.name, type, year, deadline).then(function (found) {
-      console.log('[TIMING] search:', Date.now() - stageStart, 'ms');
-      stageStart = Date.now();
-      if (found) return found;
-      if (meta.original_name && meta.original_name !== meta.name) {
-        console.log('[RETRY WITH ARABIC]', meta.original_name);
-        ensureBudget(deadline, 'original title fallback');
-        return searchCinemaBox(meta.original_name, type, year, deadline);
-      }
-      return null;
-    }).catch(function (error) {
+    return searchCinemaBox(meta.name, type, year, deadline).catch(function (error) {
       // A network failure on the primary title must not suppress a distinct original-title search.
       if (meta.original_name && normalizeTitle(meta.original_name) !== normalizeTitle(meta.name)) {
         console.log('[SEARCH FALLBACK]', 'reason: primary-search-error', redactSensitive(error && error.message || error));
@@ -506,6 +496,16 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
         return searchCinemaBox(meta.original_name, type, year, deadline);
       }
       throw error;
+    }).then(function (found) {
+      console.log('[TIMING] search:', Date.now() - stageStart, 'ms');
+      stageStart = Date.now();
+      if (found) return found;
+      if (meta.original_name && normalizeTitle(meta.original_name) !== normalizeTitle(meta.name)) {
+        console.log('[RETRY WITH ARABIC]', meta.original_name);
+        ensureBudget(deadline, 'original title fallback');
+        return searchCinemaBox(meta.original_name, type, year, deadline);
+      }
+      return null;
     });
   })
   .then(function (found) {
