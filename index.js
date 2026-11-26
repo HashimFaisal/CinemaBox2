@@ -296,7 +296,7 @@ function resolveImdbId(id, mediaType) {
       });
   });
 }
-function fetchStreams(type, id) {
+function fetchStreams(type, id, suppliedMeta) {
   var episodeId = null;
   var external = parseExternalId(id);
 
@@ -305,7 +305,11 @@ function fetchStreams(type, id) {
     return Promise.resolve({ streams: [] });
   }
 
-  return getExternalMeta(type, external.imdbId).then(function (meta) {
+  var metaPromise = suppliedMeta
+    ? Promise.resolve(suppliedMeta)
+    : getExternalMeta(type, external.imdbId);
+
+  return metaPromise.then(function (meta) {
     var year = releaseYear(meta.year);
     
     return searchCinemaBox(meta.name, type, year).then(function (found) {
@@ -342,7 +346,7 @@ function fetchStreams(type, id) {
     return getPlayer(episodeId).then(function (player) {
       var streams = [];
       (player.videos || []).forEach(function (video) {
-        if (video.url && /^https?:\/\//i.test(video.url)) {
+        if (video.url && /^https?:\\/\\//i.test(video.url)) {
           var quality = video.quality || 'Video';
           streams.push({
             name: 'Cinema Box · ' + quality,
@@ -362,6 +366,32 @@ function fetchStreams(type, id) {
   });
 }
 
+function getTmdbMetadata(tmdbId, mediaType) {
+  var kind = (String(mediaType).toLowerCase() === 'tv' || String(mediaType).toLowerCase() === 'series') ? 'tv' : 'movie';
+  var key = typeof TMDB_API_KEY !== 'undefined' ? TMDB_API_KEY : '';
+  if (!key) return Promise.reject(new Error('TMDB API key is unavailable'));
+
+  var url = 'https://api.themoviedb.org/3/' + kind + '/' +
+    encodeURIComponent(String(tmdbId)) + '?api_key=' + encodeURIComponent(key) +
+    '&append_to_response=external_ids';
+
+  return cached('tmdb-meta-' + kind + '-' + tmdbId, function () {
+    return request(url).then(function (data) {
+      var imdbId = data.imdb_id || (data.external_ids && data.external_ids.imdb_id);
+      var name = data.title || data.name;
+      if (!imdbId || !name) throw new Error('TMDB metadata is incomplete for ' + tmdbId);
+
+      return {
+        imdbId: imdbId,
+        meta: {
+          name: name,
+          original_name: data.original_title || data.original_name || name,
+          year: data.release_date || data.first_air_date || ''
+        }
+      };
+    });
+  }, 600000);
+}
 function getStreamsForNuvio(input, mediaType, season, episode) {
   return Promise.resolve().then(function () {
     var args = input && typeof input === 'object'
@@ -370,19 +400,31 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
 
     var rawType = String(args.mediaType || 'movie').toLowerCase();
     var oldType = rawType === 'tv' ? 'series' : rawType;
+    var rawId = String(args.tmdbId || '').replace(/^imdb:/i, '');
 
-    return resolveImdbId(args.tmdbId, rawType).then(function (imdbId) {
+    function run(imdbId, meta) {
       if (!imdbId) return [];
-
       var id = imdbId;
       if (oldType === 'series') {
         if (args.season == null || args.episode == null) return [];
         id += ':' + Number(args.season) + ':' + Number(args.episode);
       }
-
-      return fetchStreams(oldType, id).then(function (result) {
+      return fetchStreams(oldType, id, meta).then(function (result) {
         return Array.isArray(result && result.streams) ? result.streams : [];
       });
+    }
+
+    if (/^tt\\d+$/i.test(rawId)) {
+      return getExternalMeta(oldType, rawId).then(function (meta) {
+        return run(rawId, meta);
+      });
+    }
+
+    return getTmdbMetadata(rawId, rawType).then(function (resolved) {
+      return run(resolved.imdbId, resolved.meta);
+    }).catch(function (error) {
+      console.error('[TMDB METADATA]', rawId, error.message);
+      return [];
     });
   }).catch(function (error) {
     console.error('[CINEMA BOX NUVIO]', error);
