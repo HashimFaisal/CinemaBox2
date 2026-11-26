@@ -150,7 +150,7 @@ function searchCinemaBox(title, type, year) {
     var pageRequests = new Map();
 
     function fetchSearchPage(term, pageNum) {
-      var requestKey = normalizeTitle(term) + '::' + pageNum;
+      var requestKey = String(term) + '::' + pageNum;
       if (pageRequests.has(requestKey)) return pageRequests.get(requestKey);
       var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
       function attempt(retry) {
@@ -274,9 +274,8 @@ function searchCinemaBox(title, type, year) {
           'score:', best ? best.score.toFixed(2) : 'n/a');
         // Paginate only the first-page query that produced the better candidate.
         // This avoids expanding both the plain-title and year-fallback searches.
-        var useFallback = fallbackTerm && fallbackCount >= 25 &&
-          (!firstCount || (fallbackPage.best &&
-            (!firstBest || fallbackPage.best.score > firstBest.score)));
+        var useFallback = fallbackTerm && fallbackCount >= 25 && fallbackPage.best &&
+          (!firstBest || fallbackPage.best.score > firstBest.score);
         var paginationTerm = useFallback ? fallbackTerm : title;
         var paginationCount = useFallback ? fallbackCount : firstCount;
         if (paginationCount >= 25) return fetchMorePages(paginationTerm, 2);
