@@ -1271,6 +1271,7 @@ function createInternetArchiveProvider(options) {
     const querySummaries = [];
     const rawSampleDocs = [];
     let rawResultCount = 0;
+    let missingIdentifierCount = 0;
     let firstSearchShape = null;
     const escaped = variants.map(function (value) {
       return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -1306,7 +1307,7 @@ function createInternetArchiveProvider(options) {
             ? String(search.error || search.errors || search.exception).slice(0, 200) : null
         });
         docs.forEach(function (doc) {
-          if (!doc || !doc.identifier) return;
+          if (!doc || !doc.identifier) { missingIdentifierCount += 1; return; }
           const id = String(doc.identifier);
           const previous = found.get(id);
           const score = variants.reduce(function (best, variant) {
@@ -1329,13 +1330,13 @@ function createInternetArchiveProvider(options) {
       throw new Error('All Internet Archive search queries failed');
     }
 
-    const filtered = { missingIdentifier: 0, titleMismatch: 0, yearMismatch: 0, lowTitleConfidence: 0 };
+    const filtered = { missingIdentifier: missingIdentifierCount, titleMismatch: 0, yearMismatch: 0 };
     const candidates = [];
     const docs = Array.from(found.values());
     docs.forEach(function (entry) {
       const doc = entry.doc;
       if (!doc || !doc.identifier) { filtered.missingIdentifier += 1; return; }
-      if (entry.score < 0.82) { filtered.lowTitleConfidence += 1; filtered.titleMismatch += 1; return; }
+      if (entry.score < 0.82) { filtered.titleMismatch += 1; return; }
       const candidateYear = yearOf(doc.year);
       if (year && candidateYear && candidateYear !== '1900' && year !== candidateYear) {
         filtered.yearMismatch += 1;
