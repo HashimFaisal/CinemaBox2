@@ -565,11 +565,18 @@ test('same endpoint is not counted twice as two qualities and signed URLs stay d
   assert.deepEqual(Array.from(videos, video => video.quality), ['1080p', '480p']);
 });
 
-test('unknown provider quality is retained without guessing from the URL', () => {
+test('UHD provider labels normalize to Nuvio 2160p while preserving HDR labels', () => {
   const api = loadInternals(() => {});
-  assert.equal(api.normalizeQuality(''), 'Video');
+  assert.equal(api.normalizeQuality('2160p'), '2160p');
+  assert.equal(api.normalizeQuality('2160P HDR10'), '2160p HDR10');
+  assert.equal(api.normalizeQuality('4K'), '2160p');
+  assert.equal(api.normalizeQuality('4K HDR'), '2160p HDR');
+  assert.equal(api.normalizeQuality('UHD'), '2160p');
+  assert.equal(api.normalizeQuality('UHD Dolby Vision'), '2160p Dolby Vision');
+  assert.equal(api.normalizeQuality('3840x2160'), '2160p');
+  assert.equal(api.normalizeQuality('4096 × 2160 HDR'), '2160p HDR');
   assert.equal(api.normalizeQuality('1080P'), '1080p');
-  assert.equal(api.normalizeQuality('4K HDR'), '4K HDR');
+  assert.equal(api.normalizeQuality(''), 'Video');
   assert.equal(api.normalizeQuality(undefined), 'Video');
 });
 
