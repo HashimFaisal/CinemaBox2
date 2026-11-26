@@ -24,6 +24,28 @@ function loadInternals(fetchImpl, logger) {
   return sandbox.module.exports.__test;
 }
 
+test('HTTP timing diagnostics report endpoint and duration without query secrets', async () => {
+  const logs = [];
+  const api = loadInternals(() => Promise.resolve({
+    status: 200,
+    ok: true,
+    text: () => Promise.resolve(JSON.stringify({ ok: true }))
+  }), { log(...args) { logs.push(args.join(' ')); }, error() {} });
+
+  const result = await api.request(
+    'https://api.example.test/items?api_key=test-secret-key&term=private-title'
+  );
+
+  assert.equal(result.ok, true);
+  const timing = logs.find(line => line.includes('[HTTP TIMING]'));
+  assert.ok(timing, 'expected one HTTP timing record');
+  assert.match(timing, /api\.example\.test\/items/);
+  assert.match(timing, /status: 200/);
+  assert.match(timing, /ms:/);
+  assert.equal(timing.includes('test-secret-key'), false);
+  assert.equal(timing.includes('private-title'), false);
+});
+
 test('request diagnostics redact TMDB API keys in URLs and response text', () => {
   const api = loadInternals(() => {});
   const result = api.redactSensitive(
