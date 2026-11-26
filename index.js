@@ -151,7 +151,7 @@ function searchCinemaBox(title, type, year) {
       return pageResults.length;
     }
 
-    // نفّذ أول صفحة من بحث الاسم وبحث السنة بالتوازي بدلاً من انتظار أحدهما للآخر.
+    // ابدأ ببحث الاسم فقط؛ استخدم الاسم مع السنة كاحتياط عند غياب التطابق القوي.
     function fetchFirstPage(term) {
       var queryStr = 'page_size=25&page_number=1&term=' + encodeURIComponent(term);
       return api('search?' + queryStr).then(addResults).catch(function (error) {
@@ -173,16 +173,22 @@ function searchCinemaBox(title, type, year) {
       });
     }
 
-    return Promise.all(queries.map(fetchFirstPage)).then(function (counts) {
+    return fetchFirstPage(title).then(function (firstCount) {
       var best = rankItems(Array.from(foundItems.values()));
-
-      // إذا ظهر تطابق قوي من الصفحتين الأوليين، لا حاجة لتصفح صفحات إضافية.
       if (best && best.score >= 0.95) return;
 
-      // أكمل الصفحات المطلوبة بالتوازي لكل صيغة بحث، مع إيقاف مبكر عند ظهور تطابق قوي.
-      return Promise.all(queries.map(function (term, index) {
-        return counts[index] >= 25 ? fetchMorePages(term, 2) : Promise.resolve();
-      }));
+      var fallbackTerm = year ? title + ' ' + year : null;
+      var fallbackSearch = fallbackTerm ? fetchFirstPage(fallbackTerm) : Promise.resolve(0);
+
+      return fallbackSearch.then(function (fallbackCount) {
+        best = rankItems(Array.from(foundItems.values()));
+        if (best && best.score >= 0.95) return;
+
+        var pending = [];
+        if (firstCount >= 25) pending.push(fetchMorePages(title, 2));
+        if (fallbackTerm && fallbackCount >= 25) pending.push(fetchMorePages(fallbackTerm, 2));
+        return Promise.all(pending);
+      });
     }).then(function () {
       var best = rankItems(Array.from(foundItems.values()));
       if (best && best.score >= 0.50) {
