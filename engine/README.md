@@ -41,3 +41,14 @@ A separate root-level `manifest.next-test.json` uses the unique add-on ID `cinem
 
 Test manifest URL:
 `https://raw.githubusercontent.com/HashimFaisal/CinemaBox2/engine/cinemabox-next-v2/manifest.next-test.json`
+
+
+## Provider health metrics (extraction, not playback)
+
+The runtime health snapshot distinguishes productive extraction from transport failures:
+- `productiveRate` is the share of provider attempts that returned at least one valid HTTP(S) stream URL. The legacy `successRate` field remains an alias for compatibility.
+- `emptyResponses` counts successful provider calls that yielded no valid streams.
+- `errorCount` and `timeoutCount` track failed calls; `rejectedStreams` counts invalid stream candidates.
+- `validStreams` counts accepted stream candidates and `latencyEwmaMs` measures provider response latency.
+
+These are **not playback-success metrics**. The Nuvio scraper contract supplies stream candidates but no callback when a user starts, buffers, or completes playback. Playback verification must therefore come from Nuvio player logs or an explicit future host feedback API. Ranking remains quality-first, then configured provider priority, productive extraction rate, and response latency; it must not claim that a source has been playback-verified.
