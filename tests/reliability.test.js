@@ -731,3 +731,51 @@ test('TMDB authorization failures are classified and API keys stay redacted', as
   assert.ok(payload.message.includes('[REDACTED]'));
   assert.doesNotMatch(payload.message, /test-secret-key/);
 });
+
+
+test('quality audit explicitly reports 2160p without logging stream URLs', async () => {
+  const logs = [];
+  const logger = { log(...args) { logs.push(args.join(' ')); }, error() {} };
+  const api = loadInternals(url => {
+    if (url.includes('/search?')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 2160, title: 'UHD Audit Movie', type: 'MOVIE' }]
+        }))
+      });
+    }
+    if (url.includes('/shows/shows/dynamic/2160')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ post_info: { episode_id: 21600 } }))
+      });
+    }
+    if (url.includes('/shows/episodes/player/21600')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          videos: [
+            { url: 'https://cdn.example/uhd-secret.mp4?token=private', quality: '2160p' },
+            { url: 'https://cdn.example/fullhd.mp4', quality: '1080p' }
+          ]
+        }))
+      });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  }, logger);
+
+  const result = await api.fetchStreams('movie', 'tt2160001', {
+    name: 'UHD Audit Movie',
+    original_name: 'UHD Audit Movie',
+    year: ''
+  });
+  assert.equal(result.streams.length, 2);
+  const audit = logs.find(line => line.includes('[CINEMABOX QUALITY AUDIT]'));
+  assert.ok(audit, 'expected explicit quality audit log');
+  const payload = JSON.parse(audit.slice(audit.indexOf('{')));
+  assert.deepEqual(Array.from(payload.qualities), ['2160p', '1080p']);
+  assert.equal(payload.has2160p, true);
+  assert.equal(payload.validUniqueStreams, 2);
+  assert.doesNotMatch(audit, /uhd-secret|private/);
+});
