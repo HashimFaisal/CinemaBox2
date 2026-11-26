@@ -76,6 +76,39 @@ test('higher-priority provider wins when stream quality is equal', async () => {
   assert.deepEqual(result.streams.map(stream => stream.providerId), ['primary', 'secondary']);
 });
 
+test('tracks provider latency, reliability, and valid stream yield', async () => {
+  let flakyCalls = 0;
+  const engine = createProviderEngine({ failureThreshold: 5, providers: [
+    { id: 'steady', priority: 10, getStreams: async () => {
+      await new Promise(resolve => setTimeout(resolve, 8));
+      return [
+        { url: 'https://cdn.example/steady-a.mp4', quality: '1080p' },
+        { url: 'https://cdn.example/steady-b.mp4', quality: '720p' }
+      ];
+    } },
+    { id: 'flaky', priority: 100, getStreams: async () => {
+      flakyCalls += 1;
+      if (flakyCalls === 1) throw new Error('temporary failure');
+      await new Promise(resolve => setTimeout(resolve, 1));
+      return [{ url: 'https://cdn.example/flaky.mp4', quality: '1080p' }];
+    } }
+  ] });
+
+  await engine.getStreams({});
+  const second = await engine.getStreams({});
+  const health = engine.getHealth();
+  assert.equal(health.steady.attempts, 2);
+  assert.equal(health.steady.successes, 2);
+  assert.equal(health.steady.successRate, 1);
+  assert.equal(health.steady.validStreams, 4);
+  assert.ok(health.steady.latencyEwmaMs >= 0);
+  assert.equal(health.flaky.attempts, 2);
+  assert.equal(health.flaky.successes, 1);
+  assert.equal(health.flaky.successRate, 0.5);
+  assert.equal(health.flaky.lastStatus, 'ok');
+  assert.deepEqual(second.streams.filter(stream => stream.quality === '1080p').map(stream => stream.providerId), ['steady', 'flaky']);
+});
+
 test('quality rank handles UHD and unknown labels', () => {
   assert.ok(qualityRank('2160p HDR') > qualityRank('1080p'));
   assert.ok(qualityRank('1080p') > qualityRank('720p'));
