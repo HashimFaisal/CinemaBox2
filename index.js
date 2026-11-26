@@ -85,12 +85,12 @@ var createProviderEngine = (function () {
       const state = health.get(provider.id);
       if (provider.enabled === false) return { providerId: provider.id, status: 'disabled', streams: [] };
       if (state.openUntil > now()) return { providerId: provider.id, status: 'circuit-open', streams: [] };
-      const providerStartedAt = now();
-      state.attempts += 1;
-      console.log('[ENGINE TRACE] provider-start', provider.id, 'at:', providerStartedAt);
       const providerTimeoutMs = Math.max(100, Number(provider.timeoutMs) || defaultTimeoutMs);
       const deadline = Math.min(Number.isFinite(context.deadline) ? context.deadline : Infinity, now() + providerTimeoutMs);
       if (deadline <= now()) return { providerId: provider.id, status: 'deadline-exceeded', streams: [] };
+      const providerStartedAt = now();
+      state.attempts += 1;
+      console.log('[ENGINE TRACE] provider-start', provider.id, 'at:', providerStartedAt);
   
         let timer;
       let timedOut = false;
