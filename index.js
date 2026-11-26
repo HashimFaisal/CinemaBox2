@@ -191,14 +191,14 @@ function requestWithRetry(url, deadline, maxRetries) {
     ensureBudget(deadline, 'retryable HTTP request');
     return request(url, deadline).catch(function (error) {
       var message = String(error && error.message || error);
-      var retryable = /HTTP (?:408|425|429|500|502|503|504)\\b/.test(message) ||
+      var retryable = /HTTP (?:408|425|429|500|502|503|504)\b/.test(message) ||
         /network|fetch failed|timeout|timed out|ECONN|ENOTFOUND|EAI_AGAIN/i.test(message);
       if (!retryable || index >= retries) throw error;
 
       var delay = 200 * (index + 1);
       console.log('[HTTP RETRY]', 'attempt:', index + 2,
         'maxAttempts:', retries + 1, 'delayMs:', delay,
-        'reason:', /HTTP \\d+/.test(message) ? message.match(/HTTP \\d+/)[0] : 'network');
+        'reason:', /HTTP \d+/.test(message) ? message.match(/HTTP \d+/)[0] : 'network');
       return new Promise(function (resolve) {
         setTimeout(resolve, delay);
       }).then(function () {
