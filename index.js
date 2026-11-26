@@ -498,7 +498,7 @@ function fetchStreams(type, id, suppliedMeta) {
       });
       var seenStreamUrls = new Set();
       playerVideos.forEach(function (video) {
-        if (video && typeof video.url === 'string' && /^https?:\\/\\//i.test(video.url) &&
+        if (video && typeof video.url === 'string' && /^https?:\/\//i.test(video.url) &&
             !seenStreamUrls.has(video.url)) {
           seenStreamUrls.add(video.url);
           var quality = video.quality || 'Video';
