@@ -26,7 +26,8 @@ function cached(key, loader, ttl) {
   if (old) cache.delete(key);
 
   const value = Promise.resolve().then(loader).catch(function (error) {
-    cache.delete(key);
+    var current = cache.get(key);
+    if (current && current.value === value) cache.delete(key);
     throw error;
   });
 
