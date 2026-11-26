@@ -17,12 +17,34 @@ function loadInternals(fetchImpl, logger) {
     console: logger || { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, getPlayer, getStreamsForNuvio };',
+    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, getPlayer, getStreamsForNuvio };',
     sandbox,
     { filename: 'index.js' }
   );
   return sandbox.module.exports.__test;
 }
+
+test('HTTP timing diagnostics report endpoint and duration without query secrets', async () => {
+  const logs = [];
+  const api = loadInternals(() => Promise.resolve({
+    status: 200,
+    ok: true,
+    text: () => Promise.resolve(JSON.stringify({ ok: true }))
+  }), { log(...args) { logs.push(args.join(' ')); }, error() {} });
+
+  const result = await api.request(
+    'https://api.example.test/items?api_key=test-secret-key&term=private-title'
+  );
+
+  assert.equal(result.ok, true);
+  const timing = logs.find(line => line.includes('[HTTP TIMING]'));
+  assert.ok(timing, 'expected one HTTP timing record');
+  assert.match(timing, /api\.example\.test\/items/);
+  assert.match(timing, /status: 200/);
+  assert.match(timing, /ms:/);
+  assert.equal(timing.includes('test-secret-key'), false);
+  assert.equal(timing.includes('private-title'), false);
+});
 
 test('request diagnostics redact TMDB API keys in URLs and response text', () => {
   const api = loadInternals(() => {});
@@ -811,4 +833,80 @@ test('Nuvio entry point emits an error-level runtime marker before early exits',
   assert.equal(payload.id, '90228');
   assert.equal(payload.season, -1);
   assert.equal(payload.episode, -1);
+});
+
+
+test('localized title lookup returns the first valid match without waiting for a slow alternate', async () => {
+  let releasePrimary;
+  let primaryStarted = false;
+  const primaryGate = new Promise(resolve => { releasePrimary = resolve; });
+  const api = loadInternals(url => {
+    const term = new URL(url).searchParams.get('term');
+    if (term === 'Primary Title') {
+      primaryStarted = true;
+      return primaryGate;
+    }
+    if (term === 'Original Title') {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 321, title: 'Original Title', type: 'MOVIE', year: '2021' }]
+        }))
+      });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  });
+
+  const pending = api.searchCinemaBoxTitles(
+    'Primary Title',
+    'Original Title',
+    'movie',
+    '2021',
+    Date.now() + 10000
+  );
+
+  const result = await Promise.race([
+    pending,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('lookup waited for slow primary query')), 250))
+  ]);
+
+  assert.equal(primaryStarted, true, 'primary lookup should also have started');
+  assert.equal(result.id, 321);
+  releasePrimary({
+    ok: true,
+    text: () => Promise.resolve(JSON.stringify({ results: [] }))
+  });
+});
+
+test('localized and original title searches start concurrently', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const startedTerms = [];
+  const api = loadInternals(url => {
+    const term = new URL(url).searchParams.get('term');
+    startedTerms.push(term);
+    return gate.then(() => ({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({
+        results: [{ id: term, title: term, type: 'MOVIE', year: '2020' }]
+      }))
+    }));
+  });
+
+  const pending = api.searchCinemaBoxTitles(
+    'The Matrix',
+    'ماتريكس',
+    'movie',
+    '2020',
+    Date.now() + 10000
+  );
+
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(startedTerms.sort(), ['The Matrix', 'ماتريكس'].sort(),
+    'both title queries should be in flight before either response resolves');
+
+  release();
+  const match = await pending;
+  assert.equal(match.title, 'The Matrix',
+    'the primary title should win an equal-confidence tie');
 });

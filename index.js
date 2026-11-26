@@ -33,11 +33,17 @@ function cached(key, loader, ttl) {
 
   if (old && (old.pending || now < old.expiresAt)) {
     // Share in-flight work and refresh LRU order for every cache hit.
+    console.log('[CACHE]', 'hit', 'kind:', String(key).split('-')[0], 'pending:', old.pending);
     cache.delete(key);
     cache.set(key, old);
     return old.value;
   }
-  if (old) cache.delete(key);
+  if (old) {
+    console.log('[CACHE]', 'expired', 'kind:', String(key).split('-')[0]);
+    cache.delete(key);
+  } else {
+    console.log('[CACHE]', 'miss', 'kind:', String(key).split('-')[0]);
+  }
 
   var entry = { time: now, expiresAt: 0, pending: true, value: null };
   var value = Promise.resolve().then(loader).then(function (result) {
@@ -135,6 +141,16 @@ function diagnostic(stage, code, type, id, error) {
 
 function request(url, deadline) {
   ensureBudget(deadline, 'HTTP request');
+  var requestStart = Date.now();
+  var timingLogged = false;
+  var requestLabel = 'unknown';
+  try {
+    var parsedUrl = new URL(url);
+    requestLabel = parsedUrl.hostname + parsedUrl.pathname;
+  } catch (error) {
+    requestLabel = 'invalid-url';
+  }
+
   return fetch(url, {
     headers: {
       Accept: 'application/json',
@@ -146,6 +162,9 @@ function request(url, deadline) {
   })
   .then(function (response) {
     return response.text().then(function (body) {
+      timingLogged = true;
+      console.log('[HTTP TIMING]', requestLabel, 'status:', response.status,
+        'ms:', Date.now() - requestStart, 'bytes:', body.length);
       if (!response.ok) {
         throw new Error('HTTP ' + response.status + ': ' + redactSensitive(url) + ' | BODY: ' + redactSensitive(body.slice(0, 700)));
       }
@@ -155,6 +174,13 @@ function request(url, deadline) {
         throw new Error('Invalid JSON from ' + redactSensitive(url) + ': ' + redactSensitive(body.slice(0, 300)));
       }
     });
+  })
+  .catch(function (error) {
+    if (!timingLogged) {
+      console.log('[HTTP TIMING]', requestLabel, 'status: failed',
+        'ms:', Date.now() - requestStart);
+    }
+    throw error;
   });
 }
 
@@ -417,6 +443,60 @@ function searchCinemaBox(title, type, year, deadline) {
     });
   }, SEARCH_CACHE_TTL_MS);
 }
+
+function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadline) {
+  var titles = [String(primaryTitle || '').trim()];
+  var alternate = String(alternateTitle || '').trim();
+  if (alternate && normalizeTitle(alternate) !== normalizeTitle(titles[0])) {
+    titles.push(alternate);
+  }
+
+  // Search localized and original titles together; one slow title must not
+  // block a valid match from the other query.
+  var searches = titles.map(function (title, index) {
+    console.log('[SEARCH PARALLEL]', 'query:', title, 'index:', index);
+    return searchCinemaBox(title, type, year, deadline).then(function (item) {
+      return { title: title, index: index, item: item, error: null };
+    }).catch(function (error) {
+      return { title: title, index: index, item: null, error: error };
+    });
+  });
+
+  // Return the first valid match instead of waiting for every title query.
+  // A slower alternate-title lookup must not delay a usable primary-title result.
+  return new Promise(function (resolve, reject) {
+    var settled = 0;
+    var firstError = null;
+    var completed = false;
+
+    function finishWithoutMatch() {
+      settled++;
+      if (settled !== searches.length || completed) return;
+      completed = true;
+      if (firstError) reject(firstError);
+      else resolve(null);
+    }
+
+    searches.forEach(function (search) {
+      search.then(function (result) {
+        if (completed) return;
+        if (result.item) {
+          completed = true;
+          console.log('[SEARCH PARALLEL MATCH]', 'query:', result.title,
+            'title:', result.item.title, 'strategy:', 'first-valid-result',
+            'completedQueries:', settled + 1, 'totalQueries:', searches.length);
+          resolve(result.item);
+          return;
+        }
+        finishWithoutMatch();
+      }).catch(function (error) {
+        if (!firstError) firstError = error;
+        finishWithoutMatch();
+      });
+    });
+  });
+}
+
 function parseExternalId(id) {
   var match = String(id).match(/^(tt\d+)(?::(\d+):(\d+))?$/);
   if (!match) return null;
@@ -601,24 +681,16 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
     
     failureStage = 'search';
     ensureBudget(deadline, 'primary title search');
-    return searchCinemaBox(meta.name || meta.original_name, type, year, deadline).catch(function (error) {
-      // A network failure on the primary title must not suppress a distinct original-title search.
-      if (meta.original_name && normalizeTitle(meta.original_name) !== normalizeTitle(meta.name)) {
-        console.log('[SEARCH FALLBACK]', 'reason: primary-search-error', redactSensitive(error && error.message || error));
-        ensureBudget(deadline, 'original title fallback after search error');
-        return searchCinemaBox(meta.original_name, type, year, deadline);
-      }
-      throw error;
-    }).then(function (found) {
+    return searchCinemaBoxTitles(
+      meta.name || meta.original_name,
+      meta.original_name,
+      type,
+      year,
+      deadline
+    ).then(function (found) {
       console.log('[TIMING] search:', Date.now() - stageStart, 'ms');
       stageStart = Date.now();
-      if (found) return found;
-      if (meta.original_name && normalizeTitle(meta.original_name) !== normalizeTitle(meta.name)) {
-        console.log('[RETRY WITH ARABIC]', meta.original_name);
-        ensureBudget(deadline, 'original title fallback');
-        return searchCinemaBox(meta.original_name, type, year, deadline);
-      }
-      return null;
+      return found;
     });
   })
   .then(function (found) {
