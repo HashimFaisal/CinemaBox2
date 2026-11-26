@@ -44,7 +44,7 @@ test('returns streams as soon as the first strong title query completes', async 
 
   try {
     const startedAt = Date.now();
-    const streams = await plugin.getStreams({ tmdbId: 'tt-fast-path', mediaType: 'movie' });
+    const streams = await plugin.getStreams({ tmdbId: 'tt7654321', mediaType: 'movie' });
     const elapsedMs = Date.now() - startedAt;
 
     assert.equal(streams.length, 1);
