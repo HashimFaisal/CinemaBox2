@@ -11,6 +11,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
 function loadInternals(fetchImpl, logger) {
   const sandbox = {
     URL,
+    AbortController,
     setTimeout,
     clearTimeout,
     module: { exports: {} },
@@ -46,6 +47,25 @@ test('HTTP timing diagnostics report endpoint and duration without query secrets
   assert.match(timing, /ms:/);
   assert.equal(timing.includes('test-secret-key'), false);
   assert.equal(timing.includes('private-title'), false);
+});
+
+test('HTTP request enforces a hard timeout and aborts the underlying fetch', async () => {
+  let signal;
+  const api = loadInternals((url, options) => {
+    signal = options && options.signal;
+    return new Promise((resolve, reject) => {
+      if (signal) {
+        signal.addEventListener('abort', () => reject(new Error('aborted by request deadline')));
+      }
+    });
+  });
+
+  await assert.rejects(
+    api.request('https://slow.example.test/hang', undefined, 20),
+    /request timeout after 20ms/
+  );
+  assert.ok(signal, 'expected AbortController signal to be passed to fetch');
+  assert.equal(signal.aborted, true, 'underlying fetch should be aborted on timeout');
 });
 
 test('request diagnostics redact TMDB API keys in URLs and response text', () => {
