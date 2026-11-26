@@ -73,7 +73,7 @@ function createInternetArchiveProvider(options) {
       const playable = files.filter(function (file) {
         if (!file || typeof file.name !== 'string' || /[\\/]/.test(file.name) || file.name.indexOf('..') !== -1) return false;
         if (!/\.(?:mp4|m4v|webm|ogv)$/i.test(file.name)) return false;
-        if (file.source === 'metadata' || file.private === 'true') return false;
+        if (file.source === 'metadata' || file.private === true || file.private === 'true') return false;
         return Number(file.size) > 0;
       }).sort(function (a, b) {
         return Number(b.size || 0) - Number(a.size || 0);
