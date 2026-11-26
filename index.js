@@ -266,6 +266,14 @@ function searchCinemaBox(title, type, year, deadline) {
         var score = rawTitleScore;
         var resultYear = releaseYear(item.year);
 
+        // When metadata supplies a release year, do not accept a known different
+        // edition/remake merely because its title is identical.
+        if (year && resultYear && resultYear !== '1900' && resultYear !== year) {
+          console.log('[SEARCH CANDIDATE REJECT]', 'reason: release-year-mismatch',
+            'title:', item.title, 'expectedYear:', year, 'actualYear:', resultYear);
+          return;
+        }
+
         if (queryTitle !== candidateTitle && queryTitle.split(' ').length === 1 && candidateTitle.split(' ').length > 1) {
           score = 0;
         }
