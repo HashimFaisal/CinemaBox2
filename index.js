@@ -417,6 +417,48 @@ function searchCinemaBox(title, type, year, deadline) {
     });
   }, SEARCH_CACHE_TTL_MS);
 }
+
+function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadline) {
+  var titles = [String(primaryTitle || '').trim()];
+  var alternate = String(alternateTitle || '').trim();
+  if (alternate && normalizeTitle(alternate) !== normalizeTitle(titles[0])) {
+    titles.push(alternate);
+  }
+
+  // Search localized and original titles together; one slow title must not
+  // block a valid match from the other query.
+  var searches = titles.map(function (title, index) {
+    console.log('[SEARCH PARALLEL]', 'query:', title, 'index:', index);
+    return searchCinemaBox(title, type, year, deadline).then(function (item) {
+      return { title: title, index: index, item: item, error: null };
+    }).catch(function (error) {
+      return { title: title, index: index, item: null, error: error };
+    });
+  });
+
+  return Promise.all(searches).then(function (results) {
+    var matches = results.filter(function (result) { return !!result.item; });
+    if (matches.length) {
+      matches.sort(function (a, b) {
+        var aScore = titleScore(a.title, a.item.title);
+        var bScore = titleScore(b.title, b.item.title);
+        if (bScore !== aScore) return bScore - aScore;
+        var aYear = year && releaseYear(a.item.year) === year ? 1 : 0;
+        var bYear = year && releaseYear(b.item.year) === year ? 1 : 0;
+        if (bYear !== aYear) return bYear - aYear;
+        return a.index - b.index;
+      });
+      console.log('[SEARCH PARALLEL MATCH]', 'query:', matches[0].title,
+        'title:', matches[0].item.title, 'alternatives:', matches.length);
+      return matches[0].item;
+    }
+
+    var failed = results.filter(function (result) { return !!result.error; });
+    if (failed.length) throw failed[0].error;
+    return null;
+  });
+}
+
 function parseExternalId(id) {
   var match = String(id).match(/^(tt\d+)(?::(\d+):(\d+))?$/);
   if (!match) return null;
@@ -601,24 +643,16 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
     
     failureStage = 'search';
     ensureBudget(deadline, 'primary title search');
-    return searchCinemaBox(meta.name || meta.original_name, type, year, deadline).catch(function (error) {
-      // A network failure on the primary title must not suppress a distinct original-title search.
-      if (meta.original_name && normalizeTitle(meta.original_name) !== normalizeTitle(meta.name)) {
-        console.log('[SEARCH FALLBACK]', 'reason: primary-search-error', redactSensitive(error && error.message || error));
-        ensureBudget(deadline, 'original title fallback after search error');
-        return searchCinemaBox(meta.original_name, type, year, deadline);
-      }
-      throw error;
-    }).then(function (found) {
+    return searchCinemaBoxTitles(
+      meta.name || meta.original_name,
+      meta.original_name,
+      type,
+      year,
+      deadline
+    ).then(function (found) {
       console.log('[TIMING] search:', Date.now() - stageStart, 'ms');
       stageStart = Date.now();
-      if (found) return found;
-      if (meta.original_name && normalizeTitle(meta.original_name) !== normalizeTitle(meta.name)) {
-        console.log('[RETRY WITH ARABIC]', meta.original_name);
-        ensureBudget(deadline, 'original title fallback');
-        return searchCinemaBox(meta.original_name, type, year, deadline);
-      }
-      return null;
+      return found;
     });
   })
   .then(function (found) {
