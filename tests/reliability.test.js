@@ -17,7 +17,7 @@ function loadInternals(fetchImpl, logger) {
     console: logger || { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, getPlayer, getStreamsForNuvio };',
+    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, requestWithRetry, getPlayer, getStreamsForNuvio };',
     sandbox,
     { filename: 'index.js' }
   );
@@ -602,6 +602,63 @@ test('UHD provider labels normalize to Nuvio 2160p while preserving HDR labels',
   assert.equal(api.normalizeQuality(undefined), 'Video');
 });
 
+
+
+test('player lookup retries one transient network failure and then succeeds', async () => {
+  let calls = 0;
+  const api = loadInternals(url => {
+    if (url.includes('/shows/episodes/player/retry-player')) {
+      calls++;
+      if (calls === 1) return Promise.reject(new Error('fetch failed: ECONNRESET'));
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ videos: [
+          { url: 'https://cdn.example/recovered.mp4', quality: '1080p' }
+        ] }))
+      });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  });
+
+  const player = await api.getPlayer('retry-player', Date.now() + 5000);
+  assert.equal(calls, 2);
+  assert.equal(player.videos.length, 1);
+});
+
+test('player lookup does not retry permanent HTTP client errors', async () => {
+  let calls = 0;
+  const api = loadInternals(() => {
+    calls++;
+    return Promise.resolve({
+      ok: false,
+      status: 404,
+      text: () => Promise.resolve('Not found')
+    });
+  });
+
+  await assert.rejects(api.getPlayer('missing-player', Date.now() + 5000), /HTTP 404/);
+  assert.equal(calls, 1);
+});
+
+test('player lookup retries a transient upstream 503 exactly once', async () => {
+  let calls = 0;
+  const api = loadInternals(() => {
+    calls++;
+    if (calls === 1) return Promise.resolve({
+      ok: false,
+      status: 503,
+      text: () => Promise.resolve('temporarily unavailable')
+    });
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ videos: [] }))
+    });
+  });
+
+  const player = await api.getPlayer('temporary-player', Date.now() + 5000);
+  assert.deepEqual(Array.from(player.videos), []);
+  assert.equal(calls, 2);
+});
 
 test('player network failures emit a stage-specific safe diagnostic', async () => {
   const diagnostics = [];
