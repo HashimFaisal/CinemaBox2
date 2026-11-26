@@ -55,6 +55,7 @@ function createProviderEngine(options) {
   const defaultTimeoutMs = Math.max(100, config.providerTimeoutMs || 8000);
   const failureThreshold = Math.max(1, Math.floor(config.failureThreshold || 2));
   const cooldownMs = Math.max(100, config.cooldownMs || 30000);
+  const maxCooldownMs = Math.max(cooldownMs, Number(config.maxCooldownMs) || 300000);
   const now = config.now || Date.now;
   const schedule = config.setTimeout || (typeof setTimeout === 'function' ? setTimeout : function () { return null; });
   const cancel = config.clearTimeout || (typeof clearTimeout === 'function' ? clearTimeout : function () {});
@@ -65,7 +66,7 @@ function createProviderEngine(options) {
         typeof provider.getStreams !== 'function') throw new TypeError('Invalid provider contract');
     if (!health.has(provider.id)) health.set(provider.id, {
       failures: 0, openUntil: 0, attempts: 0, successes: 0, validStreams: 0,
-      latencyEwmaMs: null, lastStatus: 'never'
+      latencyEwmaMs: null, lastStatus: 'never', lastCooldownMs: 0
     });
   });
 
@@ -112,7 +113,11 @@ function createProviderEngine(options) {
       state.failures += 1;
       state.lastStatus = timedOut ? 'timeout' : 'error';
       state.latencyEwmaMs = state.latencyEwmaMs == null ? elapsedMs : (state.latencyEwmaMs * 0.7) + (elapsedMs * 0.3);
-      if (state.failures >= failureThreshold) state.openUntil = now() + cooldownMs;
+      if (state.failures >= failureThreshold) {
+        const exponent = Math.min(10, state.failures - failureThreshold);
+        state.lastCooldownMs = Math.min(maxCooldownMs, cooldownMs * Math.pow(2, exponent));
+        state.openUntil = now() + state.lastCooldownMs;
+      }
       return { providerId: provider.id, status: state.lastStatus, elapsedMs: elapsedMs, streams: [] };
     }
   }
@@ -161,6 +166,7 @@ function createProviderEngine(options) {
       snapshot[id] = {
         failures: state.failures, circuitOpen: state.openUntil > now(),
         retryAt: state.openUntil > now() ? state.openUntil : null,
+        cooldownMs: state.lastCooldownMs,
         attempts: state.attempts, successes: state.successes,
         successRate: state.attempts ? state.successes / state.attempts : null,
         validStreams: state.validStreams, latencyEwmaMs: state.latencyEwmaMs,
