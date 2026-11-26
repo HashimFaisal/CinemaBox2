@@ -67,7 +67,10 @@ var createProviderEngine = (function () {
     providers.forEach(provider => {
       if (!provider || !/^[a-z0-9][a-z0-9._-]*$/i.test(String(provider.id || '')) ||
           typeof provider.getStreams !== 'function') throw new TypeError('Invalid provider contract');
-      if (!health.has(provider.id)) health.set(provider.id, { failures: 0, openUntil: 0 });
+      if (!health.has(provider.id)) health.set(provider.id, {
+        failures: 0, openUntil: 0, attempts: 0, successes: 0, validStreams: 0,
+        latencyEwmaMs: null, lastStatus: 'never'
+      });
     });
   
     async function runOne(provider, context) {
@@ -75,6 +78,7 @@ var createProviderEngine = (function () {
       if (provider.enabled === false) return { providerId: provider.id, status: 'disabled', streams: [] };
       if (state.openUntil > now()) return { providerId: provider.id, status: 'circuit-open', streams: [] };
       const providerStartedAt = now();
+      state.attempts += 1;
       console.log('[ENGINE TRACE] provider-start', provider.id, 'at:', providerStartedAt);
       const providerTimeoutMs = Math.max(100, Number(provider.timeoutMs) || defaultTimeoutMs);
       const deadline = Math.min(Number.isFinite(context.deadline) ? context.deadline : Infinity, now() + providerTimeoutMs);
@@ -98,16 +102,25 @@ var createProviderEngine = (function () {
           cancel(timer);
         }
         console.log('[ENGINE TRACE] provider-settled', provider.id, 'elapsedMs:', now() - providerStartedAt, 'timedOut:', timedOut);
+        const elapsedMs = Math.max(0, now() - providerStartedAt);
+        state.successes += 1;
         state.failures = 0;
         state.openUntil = 0;
+        state.lastStatus = 'ok';
+        state.latencyEwmaMs = state.latencyEwmaMs == null ? elapsedMs : (state.latencyEwmaMs * 0.7) + (elapsedMs * 0.3);
         const raw = Array.isArray(result) ? result : (result && Array.isArray(result.streams) ? result.streams : []);
-        return { providerId: provider.id, status: 'ok', streams: raw.map(item => normalizeStream(item, provider)).filter(Boolean) };
+        const streams = raw.map(item => normalizeStream(item, provider)).filter(Boolean);
+        state.validStreams += streams.length;
+        return { providerId: provider.id, status: 'ok', elapsedMs: elapsedMs, streams: streams };
       } catch (error) {
         console.error('[ENGINE TRACE] provider-error', provider.id, 'elapsedMs:', now() - providerStartedAt, 'timedOut:', timedOut, 'error:', String(error && error.message || error));
         if (timer !== undefined) cancel(timer);
+        const elapsedMs = Math.max(0, now() - providerStartedAt);
         state.failures += 1;
+        state.lastStatus = timedOut ? 'timeout' : 'error';
+        state.latencyEwmaMs = state.latencyEwmaMs == null ? elapsedMs : (state.latencyEwmaMs * 0.7) + (elapsedMs * 0.3);
         if (state.failures >= failureThreshold) state.openUntil = now() + cooldownMs;
-        return { providerId: provider.id, status: timedOut ? 'timeout' : 'error', streams: [] };
+        return { providerId: provider.id, status: state.lastStatus, elapsedMs: elapsedMs, streams: [] };
       }
     }
   
@@ -135,6 +148,14 @@ var createProviderEngine = (function () {
       streams.sort((a, b) => {
         const rank = qualityRank(b.quality) - qualityRank(a.quality);
         if (rank) return rank;
+        const ha = health.get(a.providerId);
+        const hb = health.get(b.providerId);
+        const rateA = ha && ha.attempts ? ha.successes / ha.attempts : 0.5;
+        const rateB = hb && hb.attempts ? hb.successes / hb.attempts : 0.5;
+        if (rateB !== rateA) return rateB - rateA;
+        const latencyA = ha && ha.latencyEwmaMs != null ? ha.latencyEwmaMs : Infinity;
+        const latencyB = hb && hb.latencyEwmaMs != null ? hb.latencyEwmaMs : Infinity;
+        if (latencyA !== latencyB) return latencyA - latencyB;
         const pa = providers.find(item => item.id === a.providerId);
         const pb = providers.find(item => item.id === b.providerId);
         return Number(pb && pb.priority || 0) - Number(pa && pa.priority || 0);
@@ -145,7 +166,14 @@ var createProviderEngine = (function () {
     function getHealth() {
       const snapshot = {};
       health.forEach((state, id) => {
-        snapshot[id] = { failures: state.failures, circuitOpen: state.openUntil > now(), retryAt: state.openUntil > now() ? state.openUntil : null };
+        snapshot[id] = {
+          failures: state.failures, circuitOpen: state.openUntil > now(),
+          retryAt: state.openUntil > now() ? state.openUntil : null,
+          attempts: state.attempts, successes: state.successes,
+          successRate: state.attempts ? state.successes / state.attempts : null,
+          validStreams: state.validStreams, latencyEwmaMs: state.latencyEwmaMs,
+          lastStatus: state.lastStatus
+        };
       });
       return snapshot;
     }
