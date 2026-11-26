@@ -1175,12 +1175,12 @@ function titleSimilarity(left, right) {
 function isPermittedLicense(metadata) {
   const license = String(metadata && (metadata.licenseurl || metadata.license_url) || '').toLowerCase();
   const rights = String(metadata && metadata.rights || '').toLowerCase();
-  return /creativecommons\\.org\\/publicdomain\\/(?:mark|zero)\\/1\\.0/.test(license) ||
+  return /creativecommons\.org\/publicdomain\/(?:mark|zero)\/1\.0/.test(license) ||
     /public domain/.test(rights);
 }
 
 function qualityOf(filename) {
-  const match = String(filename || '').match(/(?:^|[._\\s-])(2160|1440|1080|720|480|360)p(?:[._\\s-]|$)/i);
+  const match = String(filename || '').match(/(?:^|[._\s-])(2160|1440|1080|720|480|360)p(?:[._\\s-]|$)/i);
   return match ? match[1] + 'p' : 'Video';
 }
 
