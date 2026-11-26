@@ -141,41 +141,49 @@ function searchCinemaBox(title, type, year) {
       return ranked[0] || null;
     }
 
-    function fetchQuery(qIndex) {
-      if (qIndex >= queries.length) return Promise.resolve();
-      var term = queries[qIndex];
+    function addResults(data) {
+      var pageResults = Array.isArray(data && data.results) ? data.results : [];
+      pageResults.filter(function (item) {
+        return normalizeType(item.type) === type;
+      }).forEach(function (item) {
+        if (item.id) foundItems.set(String(item.id), item);
+      });
+      return pageResults.length;
+    }
 
-      function fetchPage(pageNum) {
-        if (pageNum > 5) return Promise.resolve();
-        var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
-
-        return api('search?' + queryStr).then(function (data) {
-          var pageResults = Array.isArray(data && data.results) ? data.results : [];
-          pageResults.filter(function (item) {
-            return normalizeType(item.type) === type;
-          }).forEach(function (item) {
-            if (item.id) foundItems.set(String(item.id), item);
-          });
-
-          var best = rankItems(Array.from(foundItems.values()));
-          // أوقف الصفحات الإضافية عند العثور على تطابق شبه مؤكد.
-          if (best && best.score >= 0.95) return;
-          if (pageResults.length < 25) return;
-          return fetchPage(pageNum + 1);
-        }).catch(function (error) {
-          console.warn('[SEARCH PAGE ERROR]', term, 'page', pageNum, error && error.message ? error.message : error);
-        });
-      }
-
-      return fetchPage(1).then(function () {
-        var best = rankItems(Array.from(foundItems.values()));
-        // لا تنفذ بحث السنة الاحتياطي إذا كان الاسم أعطى تطابقاً قوياً.
-        if (best && best.score >= 0.95) return;
-        return fetchQuery(qIndex + 1);
+    // نفّذ أول صفحة من بحث الاسم وبحث السنة بالتوازي بدلاً من انتظار أحدهما للآخر.
+    function fetchFirstPage(term) {
+      var queryStr = 'page_size=25&page_number=1&term=' + encodeURIComponent(term);
+      return api('search?' + queryStr).then(addResults).catch(function (error) {
+        console.warn('[SEARCH PAGE ERROR]', term, 'page', 1, error && error.message ? error.message : error);
+        return 0;
       });
     }
 
-    return fetchQuery(0).then(function () {
+    function fetchMorePages(term, pageNum) {
+      if (pageNum > 5) return Promise.resolve();
+      var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
+      return api('search?' + queryStr).then(function (data) {
+        var count = addResults(data);
+        var best = rankItems(Array.from(foundItems.values()));
+        if ((best && best.score >= 0.95) || count < 25) return;
+        return fetchMorePages(term, pageNum + 1);
+      }).catch(function (error) {
+        console.warn('[SEARCH PAGE ERROR]', term, 'page', pageNum, error && error.message ? error.message : error);
+      });
+    }
+
+    return Promise.all(queries.map(fetchFirstPage)).then(function (counts) {
+      var best = rankItems(Array.from(foundItems.values()));
+
+      // إذا ظهر تطابق قوي من الصفحتين الأوليين، لا حاجة لتصفح صفحات إضافية.
+      if (best && best.score >= 0.95) return;
+
+      // أكمل الصفحات المطلوبة بالتوازي لكل صيغة بحث، مع إيقاف مبكر عند ظهور تطابق قوي.
+      return Promise.all(queries.map(function (term, index) {
+        return counts[index] >= 25 ? fetchMorePages(term, 2) : Promise.resolve();
+      }));
+    }).then(function () {
       var best = rankItems(Array.from(foundItems.values()));
       if (best && best.score >= 0.50) {
         console.log('[MATCH]', title, '=>', best.item.title, 'ID:', best.item.id, 'score:', best.score.toFixed(2));
@@ -186,7 +194,6 @@ function searchCinemaBox(title, type, year) {
     });
   }, 600000);
 }
-
 function parseExternalId(id) {
   var match = String(id).match(/^(tt\d+)(?::(\d+):(\d+))?$/);
   if (!match) return null;
