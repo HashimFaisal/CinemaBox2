@@ -1101,5 +1101,6 @@ test('bundled engine runs fallback providers only when primary results are empty
   assert.equal(fallbackCalls, 0);
   assert.equal(result.providers[1].status, 'skipped-primary-success');
   assert.equal(engine.getHealth().fallback.attempts, 0);
-  assert.deepEqual(result.streams.map(stream => stream.providerId), ['primary']);
+  assert.equal(result.streams.length, 1);
+  assert.equal(result.streams[0].providerId, 'primary');
 });
