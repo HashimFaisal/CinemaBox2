@@ -116,7 +116,7 @@ test('a late rejected cache request cannot evict a newer value for the same key'
 
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(typeof rejectFirst, 'function', 'first loader should have started');
-  const second = api.cached('shared-key', () => 'newer-value', 600000);
+  const second = api.cached('shared-key', () => 'newer-value', 0);
   assert.equal(await second, 'newer-value');
 
   rejectFirst(new Error('late failure from old request'));
