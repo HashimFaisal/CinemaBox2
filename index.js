@@ -33,11 +33,17 @@ function cached(key, loader, ttl) {
 
   if (old && (old.pending || now < old.expiresAt)) {
     // Share in-flight work and refresh LRU order for every cache hit.
+    console.log('[CACHE]', 'hit', 'kind:', String(key).split('-')[0], 'pending:', old.pending);
     cache.delete(key);
     cache.set(key, old);
     return old.value;
   }
-  if (old) cache.delete(key);
+  if (old) {
+    console.log('[CACHE]', 'expired', 'kind:', String(key).split('-')[0]);
+    cache.delete(key);
+  } else {
+    console.log('[CACHE]', 'miss', 'kind:', String(key).split('-')[0]);
+  }
 
   var entry = { time: now, expiresAt: 0, pending: true, value: null };
   var value = Promise.resolve().then(loader).then(function (result) {
@@ -135,6 +141,15 @@ function diagnostic(stage, code, type, id, error) {
 
 function request(url, deadline) {
   ensureBudget(deadline, 'HTTP request');
+  var requestStart = Date.now();
+  var requestLabel = 'unknown';
+  try {
+    var parsedUrl = new URL(url);
+    requestLabel = parsedUrl.hostname + parsedUrl.pathname;
+  } catch (error) {
+    requestLabel = 'invalid-url';
+  }
+
   return fetch(url, {
     headers: {
       Accept: 'application/json',
@@ -146,6 +161,8 @@ function request(url, deadline) {
   })
   .then(function (response) {
     return response.text().then(function (body) {
+      console.log('[HTTP TIMING]', requestLabel, 'status:', response.status,
+        'ms:', Date.now() - requestStart, 'bytes:', body.length);
       if (!response.ok) {
         throw new Error('HTTP ' + response.status + ': ' + redactSensitive(url) + ' | BODY: ' + redactSensitive(body.slice(0, 700)));
       }
@@ -155,6 +172,11 @@ function request(url, deadline) {
         throw new Error('Invalid JSON from ' + redactSensitive(url) + ': ' + redactSensitive(body.slice(0, 300)));
       }
     });
+  })
+  .catch(function (error) {
+    console.log('[HTTP TIMING]', requestLabel, 'status: failed',
+      'ms:', Date.now() - requestStart);
+    throw error;
   });
 }
 
