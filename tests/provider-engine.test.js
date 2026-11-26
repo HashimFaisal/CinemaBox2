@@ -317,3 +317,27 @@ test('skips timeout timers for embedded runtimes while preserving provider deadl
   assert.equal(result.providers[0].status, 'ok');
   assert.equal(result.streams.length, 1);
 });
+
+
+test('skips unsupported providers before scheduling timeout timers', async () => {
+  let timerScheduled = false;
+  let providerCalled = false;
+  const engine = createProviderEngine({
+    providerTimeoutMs: 5000,
+    setTimeout: () => { timerScheduled = true; return 1; },
+    clearTimeout: () => {},
+    providers: [{
+      id: 'movie-only',
+      supports: context => context.type === 'movie',
+      getStreams: async () => {
+        providerCalled = true;
+        return [];
+      }
+    }]
+  });
+  const result = await engine.getStreams({ type: 'series' });
+  assert.equal(result.providers[0].status, 'unsupported');
+  assert.equal(timerScheduled, false);
+  assert.equal(providerCalled, false);
+  assert.equal(engine.getHealth()['movie-only'].attempts, 0);
+});
