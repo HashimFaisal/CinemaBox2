@@ -136,8 +136,31 @@ function searchCinemaBox(title, type, year) {
         }
         ranked.push({ item: item, score: score, titleScore: rawTitleScore, resultYear: resultYear });
       });
-      ranked.sort(function (a, b) { return b.score - a.score; });
+      ranked.sort(function (a, b) {
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.titleScore !== a.titleScore) return b.titleScore - a.titleScore;
+        var aYearMatch = year && a.resultYear === year ? 1 : 0;
+        var bYearMatch = year && b.resultYear === year ? 1 : 0;
+        if (bYearMatch !== aYearMatch) return bYearMatch - aYearMatch;
+        return String(a.item.id).localeCompare(String(b.item.id));
+      });
       return ranked[0] || null;
+    }
+
+    function fetchSearchPage(term, pageNum) {
+      var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
+      function attempt(retry) {
+        return api('search?' + queryStr).catch(function (error) {
+          if (retry < 1) {
+            console.log('[SEARCH PAGE RETRY]', 'term:', term, 'page:', pageNum);
+            return attempt(retry + 1);
+          }
+          console.log('[SEARCH PAGE ERROR]', term, 'page', pageNum,
+            error && error.message ? error.message : error);
+          return null;
+        });
+      }
+      return attempt(0);
     }
 
     function addResults(data) {
@@ -152,10 +175,9 @@ function searchCinemaBox(title, type, year) {
 
     // ابدأ ببحث الاسم فقط؛ استخدم الاسم مع السنة كاحتياط عند غياب التطابق القوي.
     function fetchFirstPage(term) {
-      var queryStr = 'page_size=25&page_number=1&term=' + encodeURIComponent(term);
-      return api('search?' + queryStr).then(function (data) {
+      return fetchSearchPage(term, 1).then(function (data) {
         var before = foundItems.size;
-        var count = addResults(data);
+        var count = data ? addResults(data) : 0;
         var best = rankItems(Array.from(foundItems.values()));
         console.log('[SEARCH PAGE]', 'term:', term, 'page:', 1, 'returned:', count,
           'newUnique:', foundItems.size - before,
@@ -164,9 +186,6 @@ function searchCinemaBox(title, type, year) {
           'score:', best ? best.score.toFixed(2) : 'n/a',
           'year:', best ? (best.resultYear || 'unknown') : 'n/a');
         return count;
-      }).catch(function (error) {
-        console.log('[SEARCH PAGE ERROR]', term, 'page', 1, error && error.message ? error.message : error);
-        return 0;
       });
     }
 
@@ -180,12 +199,7 @@ function searchCinemaBox(title, type, year) {
       });
 
       return Promise.all(pageNumbers.map(function (number) {
-        var queryStr = 'page_size=25&page_number=' + number + '&term=' + encodeURIComponent(term);
-        return api('search?' + queryStr).catch(function (error) {
-          console.log('[SEARCH PAGE ERROR]', term, 'page', number,
-            error && error.message ? error.message : error);
-          return null;
-        });
+        return fetchSearchPage(term, number);
       })).then(function (pages) {
         // Merge in page order so equal-score tie-breaking remains deterministic.
         var counts = pages.map(function (data, index) {
@@ -205,9 +219,13 @@ function searchCinemaBox(title, type, year) {
           console.log('[SEARCH STOP]', 'reason: strong-score', 'score:', best.score.toFixed(2));
           return;
         }
-        if (counts.some(function (count) { return count < 25; })) {
+        var hadPageFailure = pages.some(function (data) { return data === null; });
+        if (!hadPageFailure && counts.some(function (count) { return count < 25; })) {
           console.log('[SEARCH STOP]', 'reason: last-page', 'returned:', counts);
           return;
+        }
+        if (hadPageFailure) {
+          console.log('[SEARCH PAGINATION]', 'reason: continue-after-page-error', 'pages:', pageNumbers);
         }
         return fetchMorePages(term, pageNum + pageNumbers.length);
       });
@@ -248,7 +266,7 @@ function searchCinemaBox(title, type, year) {
       });
     }).then(function () {
       var best = rankItems(Array.from(foundItems.values()));
-      if (best && best.score >= 0.50) {
+      if (best && best.titleScore >= 0.75 && best.score >= 0.75) {
         console.log('[MATCH]', title, '=>', best.item.title, 'ID:', best.item.id, 'score:', best.score.toFixed(2));
         return best.item;
       }
