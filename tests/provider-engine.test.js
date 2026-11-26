@@ -142,11 +142,18 @@ test('tracks provider latency, reliability, and valid stream yield', async () =>
   assert.equal(health.steady.attempts, 2);
   assert.equal(health.steady.successes, 2);
   assert.equal(health.steady.successRate, 1);
+  assert.equal(health.steady.productiveRate, 1);
+  assert.equal(health.steady.emptyResponses, 0);
+  assert.equal(health.steady.errorCount, 0);
+  assert.equal(health.steady.timeoutCount, 0);
   assert.equal(health.steady.validStreams, 4);
   assert.ok(health.steady.latencyEwmaMs >= 0);
   assert.equal(health.flaky.attempts, 2);
   assert.equal(health.flaky.successes, 1);
   assert.equal(health.flaky.successRate, 0.5);
+  assert.equal(health.flaky.productiveRate, 0.5);
+  assert.equal(health.flaky.errorCount, 1);
+  assert.equal(health.flaky.timeoutCount, 0);
   assert.equal(health.flaky.lastStatus, 'ok');
   assert.deepEqual(second.streams.filter(stream => stream.quality === '1080p').map(stream => stream.providerId), ['steady', 'flaky']);
 });
@@ -167,6 +174,10 @@ test('empty or invalid provider results expose rejection diagnostics', async () 
   assert.equal(health.successes, 0);
   assert.equal(health.successRate, 0);
   assert.equal(health.validStreams, 0);
+  assert.equal(health.emptyResponses, 1);
+  assert.equal(health.errorCount, 0);
+  assert.equal(health.rejectedStreams, 3);
+  assert.equal(health.productiveRate, 0);
   assert.equal(health.lastStatus, 'empty');
 });
 
@@ -230,6 +241,8 @@ test('times out a slow provider and still returns healthy provider streams', asy
   ] });
   const result = await engine.getStreams({});
   assert.equal(result.providers[0].status, 'timeout');
+  assert.equal(engine.getHealth().slow.errorCount, 1);
+  assert.equal(engine.getHealth().slow.timeoutCount, 1);
   assert.equal(result.providers[1].status, 'ok');
   assert.equal(result.streams.length, 1);
 });
