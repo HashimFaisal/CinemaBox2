@@ -1,5 +1,7 @@
 'use strict';
 
+const { createProviderEngine } = require('./engine/provider-engine');
+
 const BASE = 'https://cinema.albox.co/api/v4';
 const CINEMETA = 'https://v3-cinemeta.strem.io';
 
@@ -712,7 +714,7 @@ function buildStream(video, displayTitle) {
   };
 }
 
-function fetchStreams(type, id, suppliedMeta, deadline) {
+function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
   var timingStart = Date.now();
   var stageStart = timingStart;
   var episodeId = null;
@@ -882,9 +884,26 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
       has2160p: null
     }));
     diagnostic(failureStage, code, type, id, error);
+    if (throwOnError) throw error;
     return { streams: [] };
   });
 }
+
+var cinemaBoxProviderEngine = createProviderEngine({
+  providers: [{
+    id: 'cinemabox',
+    name: 'CinemaBox',
+    priority: 100,
+    getStreams: function (context) {
+      return fetchStreams(context.type, context.id, context.meta, context.deadline, true)
+        .then(function (result) { return Array.isArray(result && result.streams) ? result.streams : []; });
+    }
+  }],
+  maxConcurrency: 1,
+  providerTimeoutMs: PROVIDER_BUDGET_MS,
+  failureThreshold: 3,
+  cooldownMs: 10000
+});
 
 function getTmdbMetadata(tmdbId, mediaType, deadline) {
   var kind = (String(mediaType).toLowerCase() === 'tv' || String(mediaType).toLowerCase() === 'series') ? 'tv' : 'movie';
@@ -952,8 +971,27 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
         if (args.season == null || args.episode == null) return [];
         id += ':' + Number(args.season) + ':' + Number(args.episode);
       }
-      return fetchStreams(oldType, id, meta, deadline).then(function (result) {
-        var streams = Array.isArray(result && result.streams) ? result.streams : [];
+      return cinemaBoxProviderEngine.getStreams({
+        type: oldType,
+        id: id,
+        meta: meta,
+        deadline: deadline
+      }).then(function (result) {
+        var streams = result.streams.map(function (stream) {
+          // Preserve the exact public stream shape expected by Nuvio.
+          return {
+            name: stream.name,
+            title: stream.title,
+            url: stream.url,
+            quality: stream.quality
+          };
+        });
+        console.log('[PROVIDER ENGINE]', JSON.stringify({
+          providers: result.providers.map(function (provider) {
+            return { id: provider.providerId, status: provider.status, streams: provider.streams.length };
+          }),
+          totalStreams: streams.length
+        }));
         console.log('[TIMING] getStreams total:', Date.now() - requestStart, 'ms');
         return streams;
       });
