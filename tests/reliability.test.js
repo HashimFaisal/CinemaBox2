@@ -12,6 +12,7 @@ function loadInternals(fetchImpl, logger) {
   const sandbox = {
     URL,
     setTimeout,
+    clearTimeout,
     module: { exports: {} },
     fetch: fetchImpl,
     TMDB_API_KEY: 'test-secret-key',
