@@ -77,3 +77,11 @@ test('times out a slow provider and still returns healthy provider streams', asy
   assert.equal(result.providers[1].status, 'ok');
   assert.equal(result.streams.length, 1);
 });
+
+test('supports a provider-specific timeout shorter than the global budget', async () => {
+  const engine = createProviderEngine({ providerTimeoutMs: 1000, providers: [
+    { id: 'short', timeoutMs: 100, getStreams: () => new Promise(() => {}) }
+  ] });
+  const result = await engine.getStreams({});
+  assert.equal(result.providers[0].status, 'timeout');
+});
