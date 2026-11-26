@@ -574,7 +574,12 @@ function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadlin
         settled++;
         if (result.item) {
           candidates.push(result);
-          if (searches.length === 1) {
+          // An exact primary-title match with a matching release year is the
+          // maximum possible confidence. Do not spend the arbitration window
+          // waiting for an alternate query that cannot produce a better match.
+          if (result.index === 0 && candidateScore(result) >= 1.099) {
+            finishWithBest('primary-exact-year-match');
+          } else if (searches.length === 1) {
             finishWithBest('single-query');
           } else if (settled === searches.length) {
             finishWithBest('all-queries-settled');
