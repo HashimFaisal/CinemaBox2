@@ -141,12 +141,12 @@ test('Internet Archive adapter returns a valid public-domain video and explains 
     });
     throw new Error('Unexpected URL: ' + url);
   }, { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
-  const provider = api.createInternetArchiveProvider();
+  const provider = api.createInternetArchiveProvider({ console: { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} } });
   const streams = await provider.getStreams({
     type: 'movie',
     meta: { name: 'Valid Film', year: '1931' }
   });
-  assert.equal(streams.length, 1, logs.join('\n'));
+  assert.equal(streams.length, 1, JSON.stringify({ logs, streams }));
   assert.equal(streams[0].quality, '1080p');
   assert.equal(streams[0].url, 'https://archive.org/download/valid-film/valid-film-1080p.mp4');
   const complete = logs.find(line => line.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && line.includes('"stage":"complete"'));
@@ -221,13 +221,13 @@ test('Internet Archive searches original title variants, ranks candidates, and c
     throw new Error('Unexpected URL: ' + url);
   }, { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
 
-  const provider = api.createInternetArchiveProvider();
+  const provider = api.createInternetArchiveProvider({ console: { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} } });
   const context = {
     type: 'movie',
     meta: { name: 'Localized Alias', original_title: 'Original Title', year: '1930' }
   };
   const first = await provider.getStreams(context);
-  assert.equal(first.length, 1, logs.join('\n'));
+  assert.equal(first.length, 1, JSON.stringify({ logs, first }));
   assert.equal(first[0].quality, '1080p');
   assert.ok(requests.some(url => new URL(url).searchParams.get('q').includes('Original Title')));
   assert.equal(requests.filter(url => url.includes('/advancedsearch.php')).length, 2);
