@@ -92,7 +92,7 @@ test('Internet Archive adapter diagnoses empty search results', async () => {
   const api = loadInternals(() => Promise.resolve({
     ok: true,
     json: async () => ({ response: { docs: [] } })
-  }), { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
+  }), { error() {}, warn() {}, log(...args) { logs.push(args.join(' ')); } });
   const provider = api.createInternetArchiveProvider();
   const streams = await provider.getStreams({ type: 'movie', meta: { name: 'Unavailable Film', year: '2024' } });
   assert.equal(streams.length, 0);
