@@ -63,6 +63,19 @@ test('disabled providers are skipped and empty responses remain valid', async ()
   assert.equal(result.streams.length, 0);
 });
 
+test('higher-priority provider wins when stream quality is equal', async () => {
+  const engine = createProviderEngine({ providers: [
+    { id: 'secondary', priority: 50, getStreams: async () => [
+      { url: 'https://cdn.example/secondary.mp4', quality: '1080p' }
+    ] },
+    { id: 'primary', priority: 100, getStreams: async () => [
+      { url: 'https://cdn.example/primary.mp4', quality: '1080p' }
+    ] }
+  ] });
+  const result = await engine.getStreams({});
+  assert.deepEqual(result.streams.map(stream => stream.providerId), ['primary', 'secondary']);
+});
+
 test('quality rank handles UHD and unknown labels', () => {
   assert.ok(qualityRank('2160p HDR') > qualityRank('1080p'));
   assert.ok(qualityRank('1080p') > qualityRank('720p'));
