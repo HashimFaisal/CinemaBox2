@@ -102,6 +102,18 @@ function normalizeQuality(value) {
   if (match) return match[1] + 'p';
   return quality;
 }
+function diagnostic(stage, code, type, id, error) {
+  var message = error && error.message ? error.message : (error == null ? '' : String(error));
+  var detail = {
+    stage: stage,
+    code: code,
+    type: type || 'unknown',
+    id: id || 'unknown'
+  };
+  if (message) detail.message = redactSensitive(message);
+  console.error('[CINEMABOX DIAGNOSTIC]', JSON.stringify(detail));
+}
+
 function request(url, deadline) {
   ensureBudget(deadline, 'HTTP request');
   return fetch(url, {
@@ -541,10 +553,11 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
   var stageStart = timingStart;
   var episodeId = null;
   var displayTitle = '';
+  var failureStage = 'metadata';
   var external = parseExternalId(id);
 
   if (!external) {
-    console.log('[UNSUPPORTED ID]', type, id);
+    diagnostic('input', 'UNSUPPORTED_ID', type, id);
     return Promise.resolve({ streams: [] });
   }
 
@@ -553,6 +566,10 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
     : getExternalMeta(type, external.imdbId, deadline);
 
   return metaPromise.then(function (meta) {
+    if (!meta || (!meta.name && !meta.original_name)) {
+      diagnostic('metadata', 'METADATA_INCOMPLETE', type, id);
+      return null;
+    }
     displayTitle = String(meta.name || meta.original_name || external.imdbId);
     if (type === 'series' && external.season != null && external.episode != null) {
       var seasonLabel = String(external.season).padStart(2, '0');
@@ -563,8 +580,9 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
     stageStart = Date.now();
     var year = releaseYear(meta.year);
     
+    failureStage = 'search';
     ensureBudget(deadline, 'primary title search');
-    return searchCinemaBox(meta.name, type, year, deadline).catch(function (error) {
+    return searchCinemaBox(meta.name || meta.original_name, type, year, deadline).catch(function (error) {
       // A network failure on the primary title must not suppress a distinct original-title search.
       if (meta.original_name && normalizeTitle(meta.original_name) !== normalizeTitle(meta.name)) {
         console.log('[SEARCH FALLBACK]', 'reason: primary-search-error', redactSensitive(error && error.message || error));
@@ -585,21 +603,35 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
     });
   })
   .then(function (found) {
-    if (!found) return null;
+    if (!found) {
+      diagnostic('search', 'TITLE_NOT_FOUND', type, id);
+      return null;
+    }
+    failureStage = 'details';
     ensureBudget(deadline, 'show details');
     return getDetails(found.id, null, deadline).then(function (details) {
       console.log('[TIMING] details:', Date.now() - stageStart, 'ms');
       stageStart = Date.now();
       var post = details.post_info;
-      if (!post) return null;
+      if (!post) {
+        diagnostic('details', 'DETAILS_PAYLOAD_INCOMPLETE', type, id);
+        return null;
+      }
 
       if (type === 'movie') {
         episodeId = post.episode_id;
         return episodeId;
       }
 
-      if (external.season == null || external.episode == null) return null;
-      return findEpisode(details, found.id, external.season, external.episode, deadline);
+      if (external.season == null || external.episode == null) {
+        diagnostic('episode', 'EPISODE_NOT_SELECTED', type, id);
+        return null;
+      }
+      failureStage = 'episode';
+      return findEpisode(details, found.id, external.season, external.episode, deadline).then(function (resolved) {
+        if (!resolved) diagnostic('episode', 'EPISODE_NOT_FOUND', type, id);
+        return resolved;
+      });
     });
   })
   .then(function (resolvedEpisodeId) {
@@ -609,11 +641,20 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
       return { streams: [] };
     }
 
+    failureStage = 'player';
     ensureBudget(deadline, 'player lookup');
     return getPlayer(episodeId, deadline).then(function (player) {
       console.log('[TIMING] player:', Date.now() - stageStart, 'ms');
       var streams = [];
-      var playerVideos = Array.isArray(player && player.videos) ? player.videos : [];
+      if (!player || !Array.isArray(player.videos)) {
+        diagnostic('player', 'PLAYER_PAYLOAD_INVALID', type, id,
+          new Error('Expected videos array; received ' + (player && typeof player.videos)));
+        return { streams: [] };
+      }
+      var playerVideos = player.videos;
+      if (playerVideos.length === 0) {
+        diagnostic('player', 'PLAYER_EMPTY', type, id);
+      }
       console.log('[PLAYER DIAGNOSTICS]', type, id,
         'playerKeys:', Object.keys(player || {}),
         'videosType:', Array.isArray(player && player.videos) ? 'array' : typeof (player && player.videos),
@@ -633,6 +674,9 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
         qualityCounts[stream.quality] = (qualityCounts[stream.quality] || 0) + 1;
       });
       console.log('[STREAM QUALITY SUMMARY]', JSON.stringify(qualityCounts));
+      if (playerVideos.length > 0 && streams.length === 0) {
+        diagnostic('player', 'NO_VALID_STREAM_URLS', type, id);
+      }
       console.log('[STREAMS]', type, id, 'episode:', episodeId,
         'rawVideos:', playerVideos.length, 'uniqueValid:', streams.length,
         'total:', Date.now() - timingStart, 'ms');
@@ -640,7 +684,15 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
     });
   })
   .catch(function (error) {
-    console.error('[STREAM ERROR]', type, id, error.message);
+    var message = String(error && error.message || error);
+    var code = /time budget exceeded/i.test(message) ? 'TIME_BUDGET_EXCEEDED' :
+      (/HTTP (401|403)\\b/.test(message) ? 'UPSTREAM_AUTH_ERROR' :
+      (/HTTP (429)\\b/.test(message) ? 'UPSTREAM_RATE_LIMIT' :
+      (/HTTP (5\\d\\d)\\b/.test(message) ? 'UPSTREAM_SERVER_ERROR' :
+      (/HTTP (4\\d\\d)\\b/.test(message) ? 'UPSTREAM_CLIENT_ERROR' :
+      (/network|fetch failed|timeout|timed out|ECONN|ENOTFOUND|EAI_AGAIN/i.test(message) ? 'NETWORK_ERROR' :
+      (/Invalid JSON/i.test(message) ? 'INVALID_UPSTREAM_JSON' : 'UNEXPECTED_ERROR'))))));
+    diagnostic(failureStage, code, type, id, error);
     return { streams: [] };
   });
 }
