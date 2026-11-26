@@ -814,6 +814,48 @@ test('Nuvio entry point emits an error-level runtime marker before early exits',
 });
 
 
+test('localized title lookup returns the first valid match without waiting for a slow alternate', async () => {
+  let releasePrimary;
+  let primaryStarted = false;
+  const primaryGate = new Promise(resolve => { releasePrimary = resolve; });
+  const api = loadInternals(url => {
+    const term = new URL(url).searchParams.get('term');
+    if (term === 'Primary Title') {
+      primaryStarted = true;
+      return primaryGate;
+    }
+    if (term === 'Original Title') {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 321, title: 'Original Title', type: 'MOVIE', year: '2021' }]
+        }))
+      });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  });
+
+  const pending = api.searchCinemaBoxTitles(
+    'Primary Title',
+    'Original Title',
+    'movie',
+    '2021',
+    Date.now() + 10000
+  );
+
+  const result = await Promise.race([
+    pending,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('lookup waited for slow primary query')), 250))
+  ]);
+
+  assert.equal(primaryStarted, true, 'primary lookup should also have started');
+  assert.equal(result.id, 321);
+  releasePrimary({
+    ok: true,
+    text: () => Promise.resolve(JSON.stringify({ results: [] }))
+  });
+});
+
 test('localized and original title searches start concurrently', async () => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
