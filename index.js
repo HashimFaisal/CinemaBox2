@@ -52,8 +52,13 @@ function uniqueStreamVideos(videos) {
     if (!video || typeof video.url !== 'string') return false;
     var url = video.url;
     // Reject incomplete or malformed HTTP URLs before handing them to the player.
-    if (url !== url.trim() || /\\s|\\\\/.test(url) ||
-        !/^https?:\\/\\/[^/?#\\s]+(?:[/?#]|$)/i.test(url)) return false;
+    if (url !== url.trim() || url.indexOf('\\') !== -1 || /\s/.test(url)) return false;
+    var protocolEnd = url.indexOf('://');
+    if (protocolEnd < 0) return false;
+    var protocol = url.slice(0, protocolEnd).toLowerCase();
+    if (protocol !== 'http' && protocol !== 'https') return false;
+    var authority = url.slice(protocolEnd + 3).split(/[/?#]/, 1)[0];
+    if (!authority || authority.charAt(0) === '.' || authority.charAt(authority.length - 1) === ':') return false;
     // Keep the original URL untouched: signed query strings may be order-sensitive.
     if (seen.has(url)) return false;
     seen.add(url);
