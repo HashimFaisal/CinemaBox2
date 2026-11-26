@@ -16,7 +16,7 @@ function loadSearch(fetchImpl) {
     console: { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\\nmodule.exports.__test = { searchCinemaBox, normalizeTitle, titleScore };',
+    source + '\nmodule.exports.__test = { searchCinemaBox, normalizeTitle, titleScore };',
     sandbox,
     { filename: 'index.js' }
   );
