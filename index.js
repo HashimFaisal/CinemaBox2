@@ -124,22 +124,19 @@ function searchCinemaBox(title, type, year) {
       var term = queries[qIndex];
 
       function fetchPage(pageNum) {
-        if (!Number.isInteger(pageNum) || pageNum < 1 || pageNum > 5) {
-          return Promise.resolve();
-        }
-
+        if (pageNum > 5) return Promise.resolve();
+        
+        // استبدلنا URLSearchParams بنص عادي لتجنب مشاكل Hermes
         var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
-
+        
         return api('search?' + queryStr).then(function (data) {
-          var pageResults = Array.isArray(data && data.results) ? data.results : [];
-          var results = pageResults.filter(function (item) {
+          var results = (data.results || []).filter(function (item) {
             return normalizeType(item.type) === type;
           });
           results.forEach(function (item) {
             if (item.id) foundItems.set(String(item.id), item);
           });
-
-          if (pageResults.length < 25 || pageNum === 5) return Promise.resolve();
+          if ((data.results || []).length < 25) return Promise.resolve();
           return fetchPage(pageNum + 1);
         }).catch(function (error) {
           console.warn('[SEARCH PAGE ERROR]', term, 'page', pageNum, error && error.message ? error.message : error);
@@ -266,12 +263,6 @@ function resolveImdbId(id, mediaType) {
   if (/^tt\d+$/i.test(value)) return Promise.resolve(value);
 
   var kind = (String(mediaType).toLowerCase() === 'tv' || String(mediaType).toLowerCase() === 'series') ? 'tv' : 'movie';
-
-  if (kind === 'movie' && value === '603') {
-    console.log('[TMDB BYPASS] Using known IMDb ID for Nuvio test movie');
-    return Promise.resolve('tt0133093');
-  }
-
   var detailsUrl = 'https://api.themoviedb.org/3/' + kind + '/' + encodeURIComponent(value);
   var key = typeof TMDB_API_KEY !== 'undefined' ? TMDB_API_KEY : '';
 
