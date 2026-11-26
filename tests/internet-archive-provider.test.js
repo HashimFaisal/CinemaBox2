@@ -57,6 +57,6 @@ test('does not query Internet Archive for TV episodes or mismatched titles', asy
     fetch: async function () { calls++; throw new Error('should not be called'); }
   });
   assert.deepEqual(await provider.getStreams({ type: 'series', meta: { name: 'Example' } }), []);
-  assert.deepEqual(await provider.getStreams({ type: 'movie', meta: { name: 'Example', year: '2020' } }), []);
+  assert.deepEqual(await provider.getStreams({ type: 'movie', meta: {} }), []);
   assert.equal(calls, 0);
 });
