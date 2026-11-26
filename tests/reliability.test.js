@@ -185,6 +185,66 @@ test('Internet Archive adapter reports title and year candidate filtering', asyn
   assert.deepEqual(payload.filtered, { missingIdentifier: 1, titleMismatch: 1, yearMismatch: 1 });
 });
 
+test('Internet Archive searches original title variants, ranks candidates, and caches positive results', async () => {
+  const logs = [];
+  const requests = [];
+  const api = loadInternals(url => {
+    requests.push(url);
+    if (url.includes('/advancedsearch.php')) {
+      const term = new URL(url).searchParams.get('q') || '';
+      if (term.includes('Original Title')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            response: {
+              numFound: 1,
+              docs: [{ identifier: 'original-title-film', title: 'Original Title: Restored Edition', year: '1930', downloads: 500 }]
+            }
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ response: { numFound: 0, docs: [] } }) });
+    }
+    if (url.includes('/metadata/original-title-film')) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          metadata: {
+            title: 'Original Title: Restored Edition',
+            year: '1930',
+            licenseurl: 'https://creativecommons.org/publicdomain/zero/1.0/'
+          },
+          files: [{ name: 'restored-1080p.mp4', size: '2500000' }]
+        })
+      });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  }, { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
+
+  const provider = api.createInternetArchiveProvider();
+  const context = {
+    type: 'movie',
+    meta: { name: 'Localized Alias', original_title: 'Original Title', year: '1930' }
+  };
+  const first = await provider.getStreams(context);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].quality, '1080p');
+  assert.ok(requests.some(url => new URL(url).searchParams.get('q').includes('Original Title')));
+  assert.equal(requests.filter(url => url.includes('/advancedsearch.php')).length, 2);
+
+  const second = await provider.getStreams(context);
+  assert.equal(second.length, 1);
+  assert.equal(requests.length, 3, 'positive result should be served from cache without repeating search or metadata requests');
+
+  const search = logs.find(line => line.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && line.includes('"stage":"search-complete"'));
+  assert.ok(search);
+  const payload = JSON.parse(search.slice(search.indexOf('{')));
+  assert.equal(payload.queryCount, 2);
+  assert.equal(payload.candidates, 1);
+  assert.ok(payload.sampleDocs[0].titleScore >= 0.82);
+  assert.ok(logs.some(line => line.includes('"stage":"cache-hit"') && line.includes('"cacheStatus":"hit"')));
+});
+
 test('bundled provider engine reports rejected streams and recovers after a transient outage', async () => {
   const api = loadInternals(() => {});
   let calls = 0;
