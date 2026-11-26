@@ -108,3 +108,25 @@ test('returns a fast provider result immediately and clears its timeout', async 
   assert.ok(elapsedMs < 1000, 'fast provider should not wait for its timeout');
   assert.equal(timerCleared, true);
 });
+
+test('skips timeout timers for embedded runtimes while preserving provider deadline context', async () => {
+  let timerScheduled = false;
+  const deadline = Date.now() + 5000;
+  const engine = createProviderEngine({
+    providerTimeoutMs: 5000,
+    setTimeout: () => { timerScheduled = true; return 1; },
+    clearTimeout: () => {},
+    providers: [{
+      id: 'embedded',
+      skipTimeoutTimer: true,
+      getStreams: async context => {
+        assert.equal(context.deadline, deadline);
+        return [{ url: 'https://cdn.example/embedded.mp4', quality: '720p' }];
+      }
+    }]
+  });
+  const result = await engine.getStreams({ deadline });
+  assert.equal(timerScheduled, false);
+  assert.equal(result.providers[0].status, 'ok');
+  assert.equal(result.streams.length, 1);
+});
