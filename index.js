@@ -398,6 +398,7 @@ function fetchStreams(type, id, suppliedMeta) {
   var timingStart = Date.now();
   var stageStart = timingStart;
   var episodeId = null;
+  var displayTitle = '';
   var external = parseExternalId(id);
 
   if (!external) {
@@ -410,6 +411,12 @@ function fetchStreams(type, id, suppliedMeta) {
     : getExternalMeta(type, external.imdbId);
 
   return metaPromise.then(function (meta) {
+    displayTitle = String(meta.name || meta.original_name || external.imdbId);
+    if (type === 'series' && external.season && external.episode) {
+      var seasonLabel = String(external.season).padStart(2, '0');
+      var episodeLabel = String(external.episode).padStart(2, '0');
+      displayTitle += ' S' + seasonLabel + 'E' + episodeLabel;
+    }
     console.log('[TIMING] metadata:', Date.now() - stageStart, 'ms');
     stageStart = Date.now();
     var year = releaseYear(meta.year);
@@ -471,7 +478,7 @@ function fetchStreams(type, id, suppliedMeta) {
           var quality = video.quality || 'Video';
           streams.push({
             name: 'Cinema Box · ' + quality,
-            title: quality + ' • Cinema Box',
+            title: displayTitle + ' · ' + quality,
             url: video.url,
             quality: quality
           });
