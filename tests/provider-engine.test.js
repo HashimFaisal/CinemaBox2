@@ -86,7 +86,7 @@ test('tracks provider latency, reliability, and valid stream yield', async () =>
         { url: 'https://cdn.example/steady-b.mp4', quality: '720p' }
       ];
     } },
-    { id: 'flaky', priority: 100, getStreams: async () => {
+    { id: 'flaky', priority: 10, getStreams: async () => {
       flakyCalls += 1;
       if (flakyCalls === 1) throw new Error('temporary failure');
       await new Promise(resolve => setTimeout(resolve, 1));
