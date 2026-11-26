@@ -936,6 +936,41 @@ test('localized title lookup returns the first valid match without waiting for a
   });
 });
 
+
+test('parallel title lookup prefers a stronger candidate within the confidence window', async () => {
+  const api = loadInternals(url => {
+    const term = new URL(url).searchParams.get('term');
+    if (term === 'Primary Title') {
+      return new Promise(resolve => setTimeout(() => resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 777, title: 'Primary Title', type: 'MOVIE', year: '2021' }]
+        }))
+      }), 45));
+    }
+    if (term === 'Original Title') {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 778, title: 'Original Title Extended', type: 'MOVIE', year: '2021' }]
+        }))
+      });
+    }
+    throw new Error('Unexpected URL: ' + term);
+  });
+
+  const result = await api.searchCinemaBoxTitles(
+    'Primary Title',
+    'Original Title',
+    'movie',
+    '2021',
+    Date.now() + 10000
+  );
+
+  assert.equal(result.id, 777,
+    'the exact primary-title candidate should beat an earlier fuzzy alternate match');
+});
+
 test('localized and original title searches start concurrently', async () => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
