@@ -16,7 +16,7 @@ function loadInternals(fetchImpl) {
     console: { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, uniqueStreamVideos, normalizeTitle, titleScore, findEpisode, buildStream };',
+    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, uniqueStreamVideos, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget };',
     sandbox,
     { filename: 'index.js' }
   );
@@ -184,4 +184,77 @@ test('episode lookup fetches season details only when requested season differs',
   assert.equal(seasonTwoEpisode, 'episode-201');
   assert.equal(requests.length, 1, 'a different season should trigger exactly one details request');
   assert.match(requests[0], /season_id=season-2-id/);
+});
+
+
+test('provider budget guard stops starting new work after the deadline', () => {
+  const api = loadInternals(() => {});
+  assert.throws(
+    () => api.ensureBudget(Date.now() - 1, 'test stage'),
+    /time budget exceeded before test stage/
+  );
+  assert.equal(api.ensureBudget(Date.now() + 1000, 'test stage'), undefined);
+});
+
+test('primary title network failure falls back to original title', async () => {
+  const requests = [];
+  const api = loadInternals((url) => {
+    requests.push(url);
+    if (url.includes('/search?') && url.includes('term=Primary')) {
+      return Promise.resolve({
+        ok: false,
+        status: 503,
+        text: () => Promise.resolve('temporary upstream error')
+      });
+    }
+    if (url.includes('/search?') && url.includes('term=Original')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 42, title: 'Original', type: 'MOVIE' }]
+        }))
+      });
+    }
+    if (url.includes('/shows/shows/dynamic/42')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ post_info: { episode_id: 99 } }))
+      });
+    }
+    if (url.includes('/shows/episodes/player/99')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          videos: [{ url: 'https://cdn.example/original.mp4', quality: '1080p' }]
+        }))
+      });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  });
+
+  const result = await api.fetchStreams('movie', 'tt1234567', {
+    name: 'Primary',
+    original_name: 'Original',
+    year: ''
+  });
+
+  assert.equal(result.streams.length, 1);
+  assert.equal(result.streams[0].quality, '1080p');
+  assert.ok(requests.some(url => url.includes('term=Primary')));
+  assert.ok(requests.some(url => url.includes('term=Original')));
+});
+
+test('permanent HTTP search errors are not retried', async () => {
+  let calls = 0;
+  const api = loadInternals(() => {
+    calls++;
+    return Promise.resolve({
+      ok: false,
+      status: 404,
+      text: () => Promise.resolve('not found')
+    });
+  });
+
+  await assert.rejects(api.searchCinemaBox('Missing', 'movie'));
+  assert.equal(calls, 1, 'a permanent 404 should not be retried');
 });
