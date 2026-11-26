@@ -628,22 +628,29 @@ function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadlin
     titles.push(alternate);
   }
 
-  // Race title variants and return the first independently validated strong match.
-  // Nuvio's scraper contract resolves one array, so avoid timer-based arbitration:
-  // an embedded runtime may delay timer callbacks and hold back already-ready streams.
+  // Run title variants concurrently. Return an exact alternate immediately,
+  // but do not let a merely fuzzy alternate beat a potentially exact primary match.
+  // Avoid timer-based arbitration because embedded Nuvio runtimes may delay timers.
   var completed = false;
   var settled = 0;
   var firstError = null;
+  var bestCandidate = null;
+  var bestTitle = '';
+  var bestConfidence = -Infinity;
 
-  function finish(item, title, reason) {
-    if (completed) return;
-    completed = true;
+  function confidenceFor(item) {
     var confidence = Math.max(titleScore(primaryTitle, item.title),
       alternate ? titleScore(alternate, item.title) : 0);
     var itemYear = releaseYear(item.year);
     if (year && itemYear && itemYear !== '1900') {
       confidence += itemYear === String(year) ? 0.1 : -0.1;
     }
+    return confidence;
+  }
+
+  function finish(item, title, reason, confidence) {
+    if (completed) return item;
+    completed = true;
     console.log('[SEARCH PARALLEL MATCH]', 'query:', title,
       'title:', item.title, 'strategy:', reason,
       'confidence:', confidence.toFixed(2),
@@ -652,34 +659,58 @@ function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadlin
   }
 
   return new Promise(function (resolve, reject) {
+    function settleIfComplete() {
+      if (completed || settled !== titles.length) return;
+      if (bestCandidate) {
+        resolve(finish(bestCandidate, bestTitle, 'best-completed-candidate', bestConfidence));
+      } else if (firstError) {
+        completed = true;
+        reject(firstError);
+      } else {
+        completed = true;
+        resolve(null);
+      }
+    }
+
     titles.forEach(function (title, index) {
       console.log('[SEARCH PARALLEL]', 'query:', title, 'index:', index);
       searchCinemaBox(title, type, year, deadline).then(function (item) {
         settled++;
         console.log('[SEARCH TRACE] query-settled', 'query:', title,
           'hasItem:', Boolean(item), 'hasError:', false, 'at:', Date.now());
-        if (completed) return;
-        if (item) {
-          // searchCinemaBox only returns items meeting its strong-match threshold.
-          resolve(finish(item, title, 'first-strong-match'));
+        if (completed || !item) {
+          settleIfComplete();
           return;
         }
-        if (settled === titles.length) {
-          completed = true;
-          if (firstError) reject(firstError);
-          else resolve(null);
+
+        var confidence = confidenceFor(item);
+        if (confidence > bestConfidence) {
+          bestCandidate = item;
+          bestTitle = title;
+          bestConfidence = confidence;
         }
+
+        // The primary query is authoritative. An alternate may short-circuit only
+        // when its candidate is an exact title match (year bonus may raise it to 1.1).
+        var exactAlternate = index > 0 && titleScore(title, item.title) >= 1;
+        if (index === 0 || exactAlternate) {
+          resolve(finish(item, title,
+            index === 0 ? 'primary-title-match' : 'exact-alternate-match',
+            confidence));
+          return;
+        }
+
+        console.log('[SEARCH PARALLEL DEFER]', 'query:', title,
+          'confidence:', confidence.toFixed(2),
+          'reason: fuzzy-alternate-await-primary');
+        settleIfComplete();
       }).catch(function (error) {
         settled++;
         console.log('[SEARCH TRACE] query-settled', 'query:', title,
           'hasItem:', false, 'hasError:', true, 'at:', Date.now());
         if (completed) return;
         if (!firstError) firstError = error;
-        if (settled === titles.length) {
-          completed = true;
-          if (firstError) reject(firstError);
-          else resolve(null);
-        }
+        settleIfComplete();
       });
     });
   });
