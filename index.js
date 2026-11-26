@@ -1165,6 +1165,7 @@ function titleSimilarity(left, right) {
   const b = normalize(right);
   if (!a || !b) return 0;
   if (a === b) return 1;
+  if (a.length > 8 && (b.indexOf(a + ' ') === 0 || a.indexOf(b + ' ') === 0)) return 0.86;
   const aWords = Array.from(new Set(a.split(' ')));
   const bWords = Array.from(new Set(b.split(' ')));
   const common = aWords.filter(function (word) { return bWords.indexOf(word) !== -1; }).length;
@@ -1236,7 +1237,7 @@ function createInternetArchiveProvider(options) {
     return 'movie|' + variants.map(normalize).sort().join('|') + '|' + (year || '');
   }
 
-  function cacheResult(key, promise) {
+  function cacheResult(key, loader) {
     const existing = INTERNET_ARCHIVE_CACHE.get(key);
     if (existing && existing.expiresAt > Date.now()) {
       trace('cache-hit', { cacheStatus: existing.streams.length ? 'hit' : 'negative-hit', streams: existing.streams.length });
@@ -1247,7 +1248,7 @@ function createInternetArchiveProvider(options) {
       return existing.pending.then(function (streams) { return streams.slice(); });
     }
     const entry = { expiresAt: 0, streams: [], pending: null };
-    entry.pending = promise.then(function (streams) {
+    entry.pending = Promise.resolve().then(loader).then(function (streams) {
       entry.streams = Array.isArray(streams) ? streams.slice() : [];
       entry.expiresAt = Date.now() + (entry.streams.length ? INTERNET_ARCHIVE_CACHE_TTL_MS : INTERNET_ARCHIVE_EMPTY_CACHE_TTL_MS);
       entry.pending = null;
@@ -1466,9 +1467,9 @@ function createInternetArchiveProvider(options) {
     const key = cacheKey('movie', variants, year);
     trace('search-start', { year: year || null, queryCount: variants.length, maxCandidates: maxCandidates });
     try {
-      return await cacheResult(key, loadStreams(input, title, variants, year));
+      return await cacheResult(key, function () { return loadStreams(input, title, variants, year); });
     } catch (error) {
-      trace('error', { stage: 'search-or-metadata', elapsedMs: Date.now(), message: String(error && error.message || error).slice(0, 250) });
+      trace('error', { stage: 'search-or-metadata', message: String(error && error.message || error).slice(0, 250) });
       throw error;
     }
   }
