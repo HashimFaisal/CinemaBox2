@@ -16,7 +16,7 @@ function loadInternals(fetchImpl) {
     console: { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, uniqueStreamVideos };',
+    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, uniqueStreamVideos, normalizeTitle, titleScore };',
     sandbox,
     { filename: 'index.js' }
   );
@@ -128,4 +128,12 @@ test('a late rejected cache request cannot evict a newer value for the same key'
   }, 600000);
   assert.equal(third, 'newer-value');
   assert.equal(thirdLoaderCalls, 0);
+});
+
+
+test('Arabic title normalization ignores diacritics and tatweel', () => {
+  const api = loadInternals(() => {});
+  assert.equal(api.normalizeTitle('الْمَاتْرِكْس'), api.normalizeTitle('الماتركس'));
+  assert.equal(api.titleScore('الْمَاتْرِكْس', 'الماتركس'), 1);
+  assert.equal(api.normalizeTitle('مــاتريكس'), api.normalizeTitle('ماتريكس'));
 });
