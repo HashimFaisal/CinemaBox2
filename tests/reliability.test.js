@@ -16,7 +16,7 @@ function loadInternals(fetchImpl) {
     console: { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, uniqueStreamVideos, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, getPlayer };',
+    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, getPlayer };',
     sandbox,
     { filename: 'index.js' }
   );
@@ -107,28 +107,43 @@ test('stream URL deduplication preserves first occurrence and rejects invalid UR
 });
 
 
-test('a late rejected cache request cannot evict a newer value for the same key', async () => {
+test('concurrent cache requests share one in-flight loader and TTL starts after completion', async () => {
   const api = loadInternals(() => {});
-  let rejectFirst;
-  const first = api.cached('shared-key', () => new Promise((resolve, reject) => {
-    rejectFirst = reject;
-  }), 0);
+  let calls = 0;
+  const loader = () => new Promise(resolve => {
+    calls++;
+    setTimeout(() => resolve('cached-result'), 40);
+  });
 
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(typeof rejectFirst, 'function', 'first loader should have started');
-  const second = api.cached('shared-key', () => 'newer-value', 0);
-  assert.equal(await second, 'newer-value');
+  const first = api.cached('shared-key', loader, 25);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const second = api.cached('shared-key', loader, 25);
+  assert.equal(await first, 'cached-result');
+  assert.equal(await second, 'cached-result');
+  assert.equal(calls, 1, 'overlapping requests must share one loader');
 
-  rejectFirst(new Error('late failure from old request'));
-  await assert.rejects(first);
-
-  let thirdLoaderCalls = 0;
-  const third = await api.cached('shared-key', () => {
-    thirdLoaderCalls++;
+  const withinTtl = await api.cached('shared-key', () => {
+    calls++;
     return 'unexpected';
-  }, 600000);
-  assert.equal(third, 'newer-value');
-  assert.equal(thirdLoaderCalls, 0);
+  }, 25);
+  assert.equal(withinTtl, 'cached-result', 'TTL must begin after the slow loader completes');
+  assert.equal(calls, 1);
+
+  await new Promise(resolve => setTimeout(resolve, 35));
+  const afterExpiry = await api.cached('shared-key', () => {
+    calls++;
+    return 'refreshed-result';
+  }, 25);
+  assert.equal(afterExpiry, 'refreshed-result');
+  assert.equal(calls, 2, 'expired values should be refreshed');
+});
+
+test('cache uses separate lifetimes for details, player links, search and metadata', () => {
+  const api = loadInternals(() => {});
+  assert.equal(api.DETAILS_CACHE_TTL_MS, 300000);
+  assert.equal(api.PLAYER_CACHE_TTL_MS, 30000);
+  assert.equal(api.SEARCH_CACHE_TTL_MS, 600000);
+  assert.equal(api.METADATA_CACHE_TTL_MS, 600000);
 });
 
 
