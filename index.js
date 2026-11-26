@@ -1183,9 +1183,10 @@ function createInternetArchiveProvider(options) {
   function trace(stage, details) {
     const payload = Object.assign({ stage: stage, provider: 'internet-archive' }, details || {});
     const message = '[INTERNET ARCHIVE DIAGNOSTIC] ' + JSON.stringify(payload);
-    // Nuvio may suppress plugin console.log output; warning-level messages are
-    // surfaced by its runtime logger while remaining non-fatal diagnostics.
-    if (logger && typeof logger.warn === 'function') logger.warn(message);
+    // Nuvio reliably surfaces console.error in its plugin runtime logs.
+    // Keep diagnostics structured and non-throwing; fall back for test/older runtimes.
+    if (logger && typeof logger.error === 'function') logger.error(message);
+    else if (logger && typeof logger.warn === 'function') logger.warn(message);
     else if (logger && typeof logger.log === 'function') logger.log(message);
   }
 
@@ -1223,8 +1224,19 @@ function createInternetArchiveProvider(options) {
       trace('error', { stage: 'search', elapsedMs: Date.now() - startedAt, message: String(error && error.message || error) });
       throw error;
     }
-    const docs = search && search.response && Array.isArray(search.response.docs)
-      ? search.response.docs : [];
+    const responseObject = search && search.response && typeof search.response === 'object'
+      ? search.response : null;
+    const docs = responseObject && Array.isArray(responseObject.docs) ? responseObject.docs : [];
+    const docsField = responseObject ? responseObject.docs : null;
+    const searchShape = {
+      topLevelKeys: search && typeof search === 'object' ? Object.keys(search).slice(0, 12) : [],
+      responseKeys: responseObject ? Object.keys(responseObject).slice(0, 16) : [],
+      docsFieldType: Array.isArray(docsField) ? 'array' : (docsField === null ? 'missing-or-null' : typeof docsField),
+      responseError: search && (search.error || search.errors || search.exception)
+        ? String(search.error || search.errors || search.exception).slice(0, 300) : null,
+      responseMessage: responseObject && (responseObject.message || responseObject.error)
+        ? String(responseObject.message || responseObject.error).slice(0, 300) : null
+    };
     const filtered = { missingIdentifier: 0, titleMismatch: 0, yearMismatch: 0 };
     const candidates = [];
     docs.forEach(function (doc) {
@@ -1237,9 +1249,10 @@ function createInternetArchiveProvider(options) {
     const selectedCandidates = candidates.slice(0, maxResults);
     trace('search-complete', {
       query: query,
-      reportedTotal: search && search.response && Number.isFinite(Number(search.response.numFound))
-        ? Number(search.response.numFound) : null,
+      reportedTotal: responseObject && Number.isFinite(Number(responseObject.numFound))
+        ? Number(responseObject.numFound) : null,
       rawResults: docs.length,
+      searchShape: searchShape,
       sampleDocs: docs.slice(0, 5).map(function (doc) {
         return {
           identifier: doc && doc.identifier ? String(doc.identifier) : null,
