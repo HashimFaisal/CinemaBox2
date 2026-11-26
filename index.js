@@ -66,8 +66,12 @@ function validateStreamUrl(value) {
   if (typeof value !== 'string' || !value || value !== value.trim() ||
       value.indexOf('\\') !== -1 || /\s/.test(value)) return false;
   // Reject empty authorities before WHATWG URL parsing normalizes malformed slashes.
-  var authorityMatch = value.match(/^https?:\\/\\/([^/?#]+)/i);
-  if (!authorityMatch || !authorityMatch[1]) return false;
+  var protocolEnd = value.indexOf('://');
+  if (protocolEnd < 0) return false;
+  var protocol = value.slice(0, protocolEnd).toLowerCase();
+  if (protocol !== 'http' && protocol !== 'https') return false;
+  var authority = value.slice(protocolEnd + 3).split(/[/?#]/, 1)[0];
+  if (!authority) return false;
   try {
     var parsed = new URL(value);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
