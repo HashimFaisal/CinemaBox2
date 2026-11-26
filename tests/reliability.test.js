@@ -26,7 +26,7 @@ function loadInternals(fetchImpl, logger) {
   return sandbox.module.exports.__test;
 }
 
-test('Internet Archive diagnostics use Nuvio's visible log channel and include raw search evidence', async () => {
+test("Internet Archive diagnostics use Nuvio's visible log channel and include raw search evidence", async () => {
   const diagnostics = [];
   const api = loadInternals(() => Promise.resolve({
     ok: true,
