@@ -27,6 +27,29 @@ function loadInternals(fetchImpl, logger) {
   return sandbox.module.exports.__test;
 }
 
+test('fresh callers do not inherit a nearly-expired in-flight cache deadline', async () => {
+  const api = loadInternals(() => {});
+  let calls = 0;
+  let releaseOld;
+  const oldPending = new Promise(resolve => { releaseOld = resolve; });
+
+  const olderDeadline = Date.now() + 500;
+  const oldCall = api.cached('deadline-aware', () => {
+    calls++;
+    return oldPending;
+  }, 600000, olderDeadline);
+
+  const freshCall = api.cached('deadline-aware', () => {
+    calls++;
+    return Promise.resolve('fresh-result');
+  }, 600000, Date.now() + 10000);
+
+  assert.equal(await freshCall, 'fresh-result');
+  assert.equal(calls, 2, 'fresh caller should start independent work');
+  releaseOld('older-result');
+  assert.equal(await oldCall, 'older-result');
+});
+
 test('HTTP timing diagnostics report endpoint and duration without query secrets', async () => {
   const logs = [];
   const api = loadInternals(() => Promise.resolve({
