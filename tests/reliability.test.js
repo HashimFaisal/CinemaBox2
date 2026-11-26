@@ -177,7 +177,7 @@ test('episode lookup fetches season details only when requested season differs',
   };
 
   const seasonOneEpisode = await api.findEpisode(showDetails, 'show-123', 1, 1);
-  assert.equal(seasonOneEpisode, undefined);
+  assert.equal(seasonOneEpisode, null);
   assert.equal(requests.length, 0, 'current season should reuse the initial details response');
 
   const seasonTwoEpisode = await api.findEpisode(showDetails, 'show-123', 2, 1);
