@@ -13,6 +13,10 @@ function redactSensitive(value) {
 
 const cache = new Map();
 const CACHE_MAX_ENTRIES = 500;
+const DETAILS_CACHE_TTL_MS = 300000;
+const PLAYER_CACHE_TTL_MS = 30000;
+const SEARCH_CACHE_TTL_MS = 600000;
+const METADATA_CACHE_TTL_MS = 600000;
 const PROVIDER_BUDGET_MS = 45000;
 const SEARCH_MAX_PAGES = 5;
 
@@ -23,23 +27,35 @@ function ensureBudget(deadline, stage) {
 }
 
 function cached(key, loader, ttl) {
-  if (ttl == null) ttl = 120000;
-  const old = cache.get(key);
-  if (old && Date.now() - old.time < ttl) {
-    // Refresh insertion order so frequently used entries stay in the LRU window.
+  if (ttl == null) ttl = DETAILS_CACHE_TTL_MS;
+  var now = Date.now();
+  var old = cache.get(key);
+
+  if (old && (old.pending || now < old.expiresAt)) {
+    // Share in-flight work and refresh LRU order for every cache hit.
     cache.delete(key);
     cache.set(key, old);
     return old.value;
   }
   if (old) cache.delete(key);
 
-  const value = Promise.resolve().then(loader).catch(function (error) {
-    var current = cache.get(key);
-    if (current && current.value === value) cache.delete(key);
+  var entry = { time: now, expiresAt: 0, pending: true, value: null };
+  var value = Promise.resolve().then(loader).then(function (result) {
+    // Start the TTL after successful completion, not when a slow request began.
+    if (cache.get(key) === entry) {
+      entry.time = Date.now();
+      entry.expiresAt = entry.time + Math.max(0, ttl);
+      entry.pending = false;
+    }
+    return result;
+  }).catch(function (error) {
+    // A late failure must never evict a newer entry for the same key.
+    if (cache.get(key) === entry) cache.delete(key);
     throw error;
   });
 
-  cache.set(key, { time: Date.now(), value: value });
+  entry.value = value;
+  cache.set(key, entry);
   while (cache.size > CACHE_MAX_ENTRIES) {
     cache.delete(cache.keys().next().value);
   }
@@ -144,13 +160,13 @@ function getDetails(id, seasonId, deadline) {
   return cached(key, function () {
     console.log('[DETAILS FETCH]', 'show:', id, 'seasonId:', seasonId || 'default');
     return api('shows/shows/dynamic/' + id + suffix, deadline);
-  });
+  }, DETAILS_CACHE_TTL_MS);
 }
 
 function getPlayer(episodeId, deadline) {
   return cached('player-' + episodeId, function () {
     return api('shows/episodes/player/' + episodeId, deadline);
-  }, 30000);
+  }, PLAYER_CACHE_TTL_MS);
 }
 
 function getExternalMeta(type, id, deadline) {
@@ -159,7 +175,7 @@ function getExternalMeta(type, id, deadline) {
       if (!data.meta || !data.meta.name) throw new Error('No external metadata for ' + id);
       return data.meta;
     });
-  }, 600000);
+  }, METADATA_CACHE_TTL_MS);
 }
 
 function searchCinemaBox(title, type, year, deadline) {
@@ -347,7 +363,7 @@ function searchCinemaBox(title, type, year, deadline) {
       console.log('[NOT FOUND]', title, year, type);
       return null;
     });
-  }, 600000);
+  }, SEARCH_CACHE_TTL_MS);
 }
 function parseExternalId(id) {
   var match = String(id).match(/^(tt\d+)(?::(\d+):(\d+))?$/);
@@ -629,7 +645,7 @@ function getTmdbMetadata(tmdbId, mediaType, deadline) {
         }
       };
     });
-  }, 600000);
+  }, METADATA_CACHE_TTL_MS);
 }
 function getStreamsForNuvio(input, mediaType, season, episode) {
   var requestStart = Date.now();
