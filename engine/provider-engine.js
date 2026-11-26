@@ -31,6 +31,13 @@ function validHttpUrl(value) {
   } catch (_) { return false; }
 }
 
+function streamRejectionReason(stream) {
+  if (!stream || typeof stream !== 'object') return 'invalid-item';
+  if (typeof stream.url !== 'string' || !stream.url) return 'missing-url';
+  if (!validHttpUrl(stream.url)) return 'invalid-url';
+  return null;
+}
+
 function normalizeStream(stream, provider) {
   if (!stream || !validHttpUrl(stream.url)) return null;
   const quality = normalizeQuality(stream.quality || stream.resolution);
@@ -102,11 +109,30 @@ function createProviderEngine(options) {
       state.openUntil = 0;
       state.latencyEwmaMs = state.latencyEwmaMs == null ? elapsedMs : (state.latencyEwmaMs * 0.7) + (elapsedMs * 0.3);
       const raw = Array.isArray(result) ? result : (result && Array.isArray(result.streams) ? result.streams : []);
-      const streams = raw.map(item => normalizeStream(item, provider)).filter(Boolean);
+      const streams = [];
+      const rejectionReasons = {};
+      raw.forEach(item => {
+        const normalized = normalizeStream(item, provider);
+        if (normalized) {
+          streams.push(normalized);
+        } else {
+          const reason = streamRejectionReason(item) || 'invalid-stream';
+          rejectionReasons[reason] = (rejectionReasons[reason] || 0) + 1;
+        }
+      });
+      const rejectedStreams = raw.length - streams.length;
       if (streams.length > 0) state.successes += 1;
       state.lastStatus = streams.length > 0 ? 'ok' : 'empty';
       state.validStreams += streams.length;
-      return { providerId: provider.id, status: 'ok', elapsedMs: elapsedMs, streams: streams };
+      return {
+        providerId: provider.id,
+        status: state.lastStatus,
+        elapsedMs: elapsedMs,
+        rawStreams: raw.length,
+        rejectedStreams: rejectedStreams,
+        rejectionReasons: rejectionReasons,
+        streams: streams
+      };
     } catch (error) {
       if (timer !== undefined) cancel(timer);
       const elapsedMs = Math.max(0, now() - startedAt);
@@ -178,4 +204,4 @@ function createProviderEngine(options) {
   return { getStreams: getStreams, getHealth: getHealth };
 }
 
-module.exports = { createProviderEngine, normalizeStream, normalizeQuality, qualityRank, validHttpUrl };
+module.exports = { createProviderEngine, normalizeStream, normalizeQuality, qualityRank, validHttpUrl, streamRejectionReason };
