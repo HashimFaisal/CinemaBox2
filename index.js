@@ -3,6 +3,14 @@
 const BASE = 'https://cinema.albox.co/api/v4';
 const CINEMETA = 'https://v3-cinemeta.strem.io';
 
+function redactSensitive(value) {
+  var text = String(value == null ? '' : value)
+    .replace(/([?&]api_key=)[^&\\s]*/gi, '$1[REDACTED]');
+  var key = typeof TMDB_API_KEY !== 'undefined' ? String(TMDB_API_KEY || '') : '';
+  if (key) text = text.split(key).join('[REDACTED]');
+  return text;
+}
+
 const cache = new Map();
 
 function cached(key, loader, ttl) {
@@ -32,12 +40,12 @@ function request(url) {
   .then(function (response) {
     return response.text().then(function (body) {
       if (!response.ok) {
-        throw new Error('HTTP ' + response.status + ': ' + url + ' | BODY: ' + body.slice(0, 700));
+        throw new Error('HTTP ' + response.status + ': ' + redactSensitive(url) + ' | BODY: ' + redactSensitive(body.slice(0, 700)));
       }
       try {
         return JSON.parse(body);
       } catch (e) {
-        throw new Error('Invalid JSON from ' + url + ': ' + body.slice(0, 300));
+        throw new Error('Invalid JSON from ' + redactSensitive(url) + ': ' + redactSensitive(body.slice(0, 300)));
       }
     });
   });
@@ -116,6 +124,7 @@ function getExternalMeta(type, id) {
 function searchCinemaBox(title, type, year) {
   return cached('search-' + type + '-' + normalizeTitle(title) + '-' + (year || ''), function () {
     var foundItems = new Map();
+    var failedPageCount = 0;
 
     function rankItems(items) {
       var queryTitle = normalizeTitle(title);
@@ -159,8 +168,9 @@ function searchCinemaBox(title, type, year) {
             console.log('[SEARCH PAGE RETRY]', 'term:', term, 'page:', pageNum);
             return attempt(retry + 1);
           }
+          failedPageCount++;
           console.log('[SEARCH PAGE ERROR]', term, 'page', pageNum,
-            error && error.message ? error.message : error);
+            error && error.message ? redactSensitive(error.message) : redactSensitive(error));
           return null;
         });
       }
@@ -286,6 +296,9 @@ function searchCinemaBox(title, type, year) {
       if (best && best.titleScore >= 0.75 && best.score >= 0.75) {
         console.log('[MATCH]', title, '=>', best.item.title, 'ID:', best.item.id, 'score:', best.score.toFixed(2));
         return best.item;
+      }
+      if (failedPageCount > 0) {
+        throw new Error('CinemaBox search incomplete: ' + failedPageCount + ' page request(s) failed');
       }
       console.log('[NOT FOUND]', title, year, type);
       return null;
