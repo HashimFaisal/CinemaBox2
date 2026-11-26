@@ -26,7 +26,7 @@ function loadInternals(fetchImpl, logger) {
   return sandbox.module.exports.__test;
 }
 
-test('Internet Archive diagnostics use the warning logger and include raw search evidence', async () => {
+test('Internet Archive diagnostics use the runtime-visible error logger and include raw search evidence', async () => {
   const warnings = [];
   const api = loadInternals(() => Promise.resolve({
     ok: true,
@@ -174,7 +174,7 @@ test('Internet Archive adapter reports title and year candidate filtering', asyn
       { identifier: 'wrong-year', title: 'Target Film', year: '1940' },
       { title: 'Target Film', year: '1931' }
     ] } })
-  }), { log(...args) { logs.push(args.join(' ')); }, error() {} });
+  }), { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
   const provider = api.createInternetArchiveProvider();
   const streams = await provider.getStreams({ type: 'movie', meta: { name: 'Target Film', year: '1931' } });
   assert.equal(streams.length, 0);
