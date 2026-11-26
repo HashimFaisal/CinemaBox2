@@ -26,6 +26,36 @@ function loadInternals(fetchImpl, logger) {
   return sandbox.module.exports.__test;
 }
 
+test('Internet Archive diagnostics use the warning logger and include raw search evidence', async () => {
+  const warnings = [];
+  const api = loadInternals(() => Promise.resolve({
+    ok: true,
+    json: async () => ({
+      response: {
+        numFound: 1,
+        docs: [{ identifier: 'thegeneral', title: 'The General', year: '1926' }]
+      }
+    })
+  }), {
+    warn(...args) { warnings.push(args.join(' ')); },
+    log() {},
+    error() {}
+  });
+  const provider = api.createInternetArchiveProvider();
+  await provider.getStreams({ type: 'movie', meta: { name: 'Other Title', year: '1926' } });
+  const line = warnings.find(item =>
+    item.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && item.includes('"stage":"search-complete"')
+  );
+  assert.ok(line, 'expected diagnostics to use console.warn when available');
+  const payload = JSON.parse(line.slice(line.indexOf('{')));
+  assert.equal(payload.reportedTotal, 1);
+  assert.equal(payload.rawResults, 1);
+  assert.deepEqual(payload.sampleDocs, [
+    { identifier: 'thegeneral', title: 'The General', year: '1926' }
+  ]);
+  assert.equal(payload.candidates, 0);
+});
+
 test('Internet Archive adapter diagnoses empty search results', async () => {
   const logs = [];
   const api = loadInternals(() => Promise.resolve({
