@@ -1369,7 +1369,9 @@ function createInternetArchiveProvider(options) {
       candidates: candidates.length,
       filtered: filtered
     });
-    return candidates.slice(0, maxCandidates).map(function (entry) { return entry.doc; });
+    const selected = candidates.slice(0, maxCandidates).map(function (entry) { return entry.doc; });
+    selected.rawResults = rawResultCount;
+    return selected;
   }
 
   async function loadStreams(input, title, variants, year) {
@@ -1460,7 +1462,7 @@ function createInternetArchiveProvider(options) {
     }
     const result = streams.slice(0, 3);
     trace('complete', {
-      rawResults: null,
+      rawResults: Number(selectedCandidates.rawResults) || 0,
       candidates: selectedCandidates.length,
       metadataRecords: metadataRecords,
       filesInspected: filesInspected,
