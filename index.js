@@ -170,26 +170,35 @@ function searchCinemaBox(title, type, year) {
 
     function fetchMorePages(term, pageNum) {
       if (pageNum > 5) return Promise.resolve();
-      var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
-      return api('search?' + queryStr).then(function (data) {
-        var count = addResults(data);
+
+      // Fetch two adjacent pages together to avoid serial network round trips.
+      // Keep the same five-page ceiling and the same strong-match stop rule.
+      var pageNumbers = [pageNum, pageNum + 1].filter(function (number) {
+        return number <= 5;
+      });
+
+      return Promise.all(pageNumbers.map(function (number) {
+        var queryStr = 'page_size=25&page_number=' + number + '&term=' + encodeURIComponent(term);
+        return api('search?' + queryStr).then(function (data) {
+          var count = addResults(data);
+          console.log('[SEARCH PAGE]', 'term:', term, 'page:', number, 'returned:', count);
+          return count;
+        }).catch(function (error) {
+          console.warn('[SEARCH PAGE ERROR]', term, 'page', number,
+            error && error.message ? error.message : error);
+          return 0;
+        });
+      })).then(function (counts) {
         var best = rankItems(Array.from(foundItems.values()));
-        console.log('[SEARCH PAGE]', 'term:', term, 'page:', pageNum, 'returned:', count,
-          'best:', best ? best.item.title : 'none',
-          'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
-          'score:', best ? best.score.toFixed(2) : 'n/a',
-          'year:', best ? (best.resultYear || 'unknown') : 'n/a');
         if (best && best.score >= 0.95) {
           console.log('[SEARCH STOP]', 'reason: strong-score', 'score:', best.score.toFixed(2));
           return;
         }
-        if (count < 25) {
-          console.log('[SEARCH STOP]', 'reason: last-page', 'returned:', count);
+        if (counts.some(function (count) { return count < 25; })) {
+          console.log('[SEARCH STOP]', 'reason: last-page', 'returned:', counts);
           return;
         }
-        return fetchMorePages(term, pageNum + 1);
-      }).catch(function (error) {
-        console.warn('[SEARCH PAGE ERROR]', term, 'page', pageNum, error && error.message ? error.message : error);
+        return fetchMorePages(term, pageNum + pageNumbers.length);
       });
     }
 
