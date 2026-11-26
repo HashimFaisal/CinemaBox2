@@ -1156,7 +1156,7 @@ function normalize(value) {
 }
 
 function yearOf(value) {
-  const match = String(value || '').match(/\\b(19|20)\\d{2}\\b/);
+  const match = String(value || '').match(/\b(19|20)\d{2}\b/);
   return match ? match[0] : '';
 }
 
@@ -1180,7 +1180,7 @@ function isPermittedLicense(metadata) {
 }
 
 function qualityOf(filename) {
-  const match = String(filename || '').match(/(?:^|[._\s-])(2160|1440|1080|720|480|360)p(?:[._\\s-]|$)/i);
+  const match = String(filename || '').match(/(?:^|[._\s-])(2160|1440|1080|720|480|360)p(?:[._\s-]|$)/i);
   return match ? match[1] + 'p' : 'Video';
 }
 
@@ -1270,7 +1270,7 @@ function createInternetArchiveProvider(options) {
     const found = new Map();
     const querySummaries = [];
     const escaped = variants.map(function (value) {
-      return value.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\"');
+      return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     });
     const requests = escaped.map(function (value, index) {
       const query = 'mediatype:movies AND title:"' + value + '"';
