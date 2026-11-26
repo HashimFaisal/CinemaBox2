@@ -1224,7 +1224,7 @@ function createInternetArchiveProvider(options) {
 }
 
 
-var ENABLE_INTERNET_ARCHIVE_PROVIDER = false;
+var ENABLE_INTERNET_ARCHIVE_PROVIDER = true;
 
 var cinemaBoxProviderEngine = createProviderEngine({
   providers: [{
