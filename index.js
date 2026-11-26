@@ -119,37 +119,7 @@ function searchCinemaBox(title, type, year) {
     if (year) queries.push(title + ' ' + year);
     var foundItems = new Map();
 
-    function fetchAllQueries(qIndex) {
-      if (qIndex >= queries.length) return Promise.resolve(foundItems);
-      var term = queries[qIndex];
-
-      function fetchPage(pageNum) {
-        if (pageNum > 5) return Promise.resolve();
-        
-        // استبدلنا URLSearchParams بنص عادي لتجنب مشاكل Hermes
-        var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
-        
-        return api('search?' + queryStr).then(function (data) {
-          var results = (data.results || []).filter(function (item) {
-            return normalizeType(item.type) === type;
-          });
-          results.forEach(function (item) {
-            if (item.id) foundItems.set(String(item.id), item);
-          });
-          if ((data.results || []).length < 25) return Promise.resolve();
-          return fetchPage(pageNum + 1);
-        }).catch(function (error) {
-          console.warn('[SEARCH PAGE ERROR]', term, 'page', pageNum, error && error.message ? error.message : error);
-          return Promise.resolve();
-        });
-      }
-
-      return fetchPage(1).then(function () {
-        return fetchAllQueries(qIndex + 1);
-      });
-    }
-
-    return fetchAllQueries(0).then(function (items) {
+    function rankItems(items) {
       var queryTitle = normalizeTitle(title);
       var ranked = [];
       items.forEach(function (item) {
@@ -160,7 +130,7 @@ function searchCinemaBox(title, type, year) {
         if (queryTitle !== candidateTitle && queryTitle.split(' ').length === 1 && candidateTitle.split(' ').length > 1) {
           score = 0;
         }
-        
+
         if (year && resultYear && resultYear !== '1900') {
           if (year === resultYear) score += 0.1;
           else score -= 0.1;
@@ -168,8 +138,45 @@ function searchCinemaBox(title, type, year) {
         ranked.push({ item: item, score: score });
       });
       ranked.sort(function (a, b) { return b.score - a.score; });
+      return ranked[0] || null;
+    }
 
-      var best = ranked[0];
+    function fetchQuery(qIndex) {
+      if (qIndex >= queries.length) return Promise.resolve();
+      var term = queries[qIndex];
+
+      function fetchPage(pageNum) {
+        if (pageNum > 5) return Promise.resolve();
+        var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
+
+        return api('search?' + queryStr).then(function (data) {
+          var pageResults = Array.isArray(data && data.results) ? data.results : [];
+          pageResults.filter(function (item) {
+            return normalizeType(item.type) === type;
+          }).forEach(function (item) {
+            if (item.id) foundItems.set(String(item.id), item);
+          });
+
+          var best = rankItems(Array.from(foundItems.values()));
+          // أوقف الصفحات الإضافية عند العثور على تطابق شبه مؤكد.
+          if (best && best.score >= 0.95) return;
+          if (pageResults.length < 25) return;
+          return fetchPage(pageNum + 1);
+        }).catch(function (error) {
+          console.warn('[SEARCH PAGE ERROR]', term, 'page', pageNum, error && error.message ? error.message : error);
+        });
+      }
+
+      return fetchPage(1).then(function () {
+        var best = rankItems(Array.from(foundItems.values()));
+        // لا تنفذ بحث السنة الاحتياطي إذا كان الاسم أعطى تطابقاً قوياً.
+        if (best && best.score >= 0.95) return;
+        return fetchQuery(qIndex + 1);
+      });
+    }
+
+    return fetchQuery(0).then(function () {
+      var best = rankItems(Array.from(foundItems.values()));
       if (best && best.score >= 0.50) {
         console.log('[MATCH]', title, '=>', best.item.title, 'ID:', best.item.id, 'score:', best.score.toFixed(2));
         return best.item;
