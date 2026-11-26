@@ -94,7 +94,14 @@ function createInternetArchiveProvider(options) {
     return streams.slice(0, 3);
   }
 
-  return { id: 'internet-archive', name: 'Internet Archive', getStreams: getStreams };
+  return {
+    id: 'internet-archive',
+    name: 'Internet Archive',
+    supports: function (context) {
+      return String(context && context.type || '').toLowerCase() === 'movie';
+    },
+    getStreams: getStreams
+  };
 }
 
 module.exports = { createInternetArchiveProvider, isPermittedLicense, qualityOf };
