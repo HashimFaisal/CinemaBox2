@@ -111,7 +111,7 @@ function uniqueStreamVideos(videos) {
 
 function streamQualityRank(video) {
   var quality = normalizeQuality(video && video.quality);
-  var match = quality.match(/^(\\d{3,4})\\s*p\\b/i);
+  var match = quality.match(/^(\d{3,4})\s*p\b/i);
   return match ? Number(match[1]) : 0;
 }
 
