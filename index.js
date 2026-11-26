@@ -297,6 +297,8 @@ function resolveImdbId(id, mediaType) {
   });
 }
 function fetchStreams(type, id, suppliedMeta) {
+  var timingStart = Date.now();
+  var stageStart = timingStart;
   var episodeId = null;
   var external = parseExternalId(id);
 
@@ -310,9 +312,13 @@ function fetchStreams(type, id, suppliedMeta) {
     : getExternalMeta(type, external.imdbId);
 
   return metaPromise.then(function (meta) {
+    console.log('[TIMING] metadata:', Date.now() - stageStart, 'ms');
+    stageStart = Date.now();
     var year = releaseYear(meta.year);
     
     return searchCinemaBox(meta.name, type, year).then(function (found) {
+      console.log('[TIMING] search:', Date.now() - stageStart, 'ms');
+      stageStart = Date.now();
       if (found) return found;
       if (meta.original_name && meta.original_name !== meta.name) {
         console.log('[RETRY WITH ARABIC]', meta.original_name);
@@ -324,6 +330,8 @@ function fetchStreams(type, id, suppliedMeta) {
   .then(function (found) {
     if (!found) return null;
     return getDetails(found.id).then(function (details) {
+      console.log('[TIMING] details:', Date.now() - stageStart, 'ms');
+      stageStart = Date.now();
       var post = details.post_info;
       if (!post) return null;
 
@@ -344,6 +352,7 @@ function fetchStreams(type, id, suppliedMeta) {
     }
 
     return getPlayer(episodeId).then(function (player) {
+      console.log('[TIMING] player:', Date.now() - stageStart, 'ms');
       var streams = [];
       (player.videos || []).forEach(function (video) {
         if (video.url && (video.url.indexOf('http://') === 0 || video.url.indexOf('https://') === 0)) {
@@ -356,7 +365,7 @@ function fetchStreams(type, id, suppliedMeta) {
           });
         }
       });
-      console.log('[STREAMS]', type, id, 'episode:', episodeId, 'count:', streams.length);
+      console.log('[STREAMS]', type, id, 'episode:', episodeId, 'count:', streams.length, 'total:', Date.now() - timingStart, 'ms');
       return { streams: streams };
     });
   })
@@ -393,6 +402,7 @@ function getTmdbMetadata(tmdbId, mediaType) {
   }, 600000);
 }
 function getStreamsForNuvio(input, mediaType, season, episode) {
+  var requestStart = Date.now();
   return Promise.resolve().then(function () {
     var args = input && typeof input === 'object'
       ? input
@@ -410,17 +420,21 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
         id += ':' + Number(args.season) + ':' + Number(args.episode);
       }
       return fetchStreams(oldType, id, meta).then(function (result) {
-        return Array.isArray(result && result.streams) ? result.streams : [];
+        var streams = Array.isArray(result && result.streams) ? result.streams : [];
+        console.log('[TIMING] getStreams total:', Date.now() - requestStart, 'ms');
+        return streams;
       });
     }
 
-    if (/^tt\\d+$/i.test(rawId)) {
+    if (/^tt\d+$/i.test(rawId)) {
       return getExternalMeta(oldType, rawId).then(function (meta) {
         return run(rawId, meta);
       });
     }
 
+    var tmdbStart = Date.now();
     return getTmdbMetadata(rawId, rawType).then(function (resolved) {
+      console.log('[TIMING] TMDB metadata:', Date.now() - tmdbStart, 'ms');
       return run(resolved.imdbId, resolved.meta);
     }).catch(function (error) {
       console.error('[TMDB METADATA]', rawId, error.message);
