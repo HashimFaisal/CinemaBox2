@@ -178,6 +178,16 @@ function normalizeQuality(value) {
   }
   return quality;
 }
+function logStageMetric(stage, startedAt, outcome) {
+  var duration = Date.now() - Number(startedAt || Date.now());
+  var metric = {
+    stage: String(stage || 'unknown'),
+    durationMs: Math.max(0, duration),
+    outcome: String(outcome || 'ok')
+  };
+  console.log('[CINEMABOX METRIC]', JSON.stringify(metric));
+}
+
 function diagnostic(stage, code, type, id, error) {
   var message = error && error.message ? error.message : (error == null ? '' : String(error));
   var detail = {
@@ -710,6 +720,7 @@ function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
     seasonPromise = getDetails(showId, seasonCard.id, deadline).then(function (loaded) {
       console.log('[TIMING] season details:', Date.now() - seasonLoadStart,
         'ms', 'season:', seasonNumber, 'seasonId:', seasonCard.id);
+      logStageMetric('season_details', seasonLoadStart, 'ok');
       var rawLoadedSeason = loaded && loaded.post_info && loaded.post_info.season_number;
       var loadedSeason = rawLoadedSeason == null || rawLoadedSeason === ''
         ? NaN : Number(rawLoadedSeason);
@@ -832,6 +843,7 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
       displayTitle += ' S' + seasonLabel + 'E' + episodeLabel;
     }
     console.log('[TIMING] metadata:', Date.now() - stageStart, 'ms');
+    logStageMetric('metadata', stageStart, 'ok');
     stageStart = Date.now();
     var year = releaseYear(meta.year);
     
@@ -845,6 +857,7 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
       deadline
     ).then(function (found) {
       console.log('[TIMING] search:', Date.now() - stageStart, 'ms');
+      logStageMetric('search', stageStart, found ? 'match' : 'no_match');
       stageStart = Date.now();
       return found;
     });
@@ -858,6 +871,7 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
     ensureBudget(deadline, 'show details');
     return getDetails(found.id, null, deadline).then(function (details) {
       console.log('[TIMING] details:', Date.now() - stageStart, 'ms');
+      logStageMetric('details', stageStart, 'ok');
       stageStart = Date.now();
       var post = details.post_info;
       if (!post) {
@@ -875,7 +889,9 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
         return null;
       }
       failureStage = 'episode';
+      var episodeStart = Date.now();
       return findEpisode(details, found.id, external.season, external.episode, deadline).then(function (resolved) {
+        logStageMetric('episode_resolution', episodeStart, resolved ? 'match' : 'no_match');
         if (!resolved) diagnostic('episode', 'EPISODE_NOT_FOUND', type, id);
         return resolved;
       });
@@ -892,6 +908,7 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
     ensureBudget(deadline, 'player lookup');
     return getPlayer(episodeId, deadline).then(function (player) {
       console.log('[TIMING] player:', Date.now() - stageStart, 'ms');
+      logStageMetric('player', stageStart, 'ok');
       var streams = [];
       if (!player || !Array.isArray(player.videos)) {
         console.error('[CINEMABOX QUALITY AUDIT]', JSON.stringify({
@@ -1053,6 +1070,7 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
       return fetchStreams(oldType, id, meta, deadline).then(function (result) {
         var streams = Array.isArray(result && result.streams) ? result.streams : [];
         console.log('[TIMING] getStreams total:', Date.now() - requestStart, 'ms');
+        logStageMetric('provider_total', requestStart, streams.length ? 'streams_found' : 'empty');
         return streams;
       });
     }
@@ -1067,6 +1085,7 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
     ensureBudget(deadline, 'TMDB metadata');
     return getTmdbMetadata(rawId, rawType, deadline).then(function (resolved) {
       console.log('[TIMING] TMDB metadata:', Date.now() - tmdbStart, 'ms');
+      logStageMetric('tmdb_metadata', tmdbStart, 'ok');
       return run(resolved.imdbId, resolved.meta);
     }).catch(function (error) {
       var message = String(error && error.message || error);
