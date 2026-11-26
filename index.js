@@ -1342,7 +1342,7 @@ function createInternetArchiveProvider(options) {
           identifier: String(entry.doc.identifier),
           title: String(entry.doc.title || ''),
           year: String(entry.doc.year || ''),
-          titleScore: Number(entry.score.toFixed(2))
+
         };
       }),
       candidates: candidates.length,
