@@ -16,7 +16,7 @@ function loadInternals(fetchImpl) {
     console: { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox };',
+    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, uniqueStreamVideos };',
     sandbox,
     { filename: 'index.js' }
   );
@@ -76,4 +76,32 @@ test('a genuine empty search result remains a valid cacheable no-result', async 
   assert.equal(first, null);
   assert.equal(second, null);
   assert.equal(calls, 1, 'a successful empty response should be cached');
+});
+
+
+test('cache stays bounded and refreshes recently used entries', async () => {
+  const api = loadInternals(() => {});
+  await api.cached('oldest', () => 'old', 600000);
+  for (let index = 0; index < api.CACHE_MAX_ENTRIES - 1; index++) {
+    await api.cached('entry-' + index, () => index, 600000);
+  }
+  await api.cached('oldest', () => 'should-not-run', 600000);
+  await api.cached('overflow', () => 'new', 600000);
+
+  assert.equal(api.cache.size, api.CACHE_MAX_ENTRIES);
+  assert.equal(api.cache.has('oldest'), true, 'recently used entry should remain');
+  assert.equal(api.cache.has('entry-0'), false, 'least recently used entry should be evicted');
+});
+
+test('stream URL deduplication preserves first occurrence and rejects invalid URLs', () => {
+  const api = loadInternals(() => {});
+  const urls = api.uniqueStreamVideos([
+    { url: 'https://cdn.example/1080p.m3u8', quality: '1080p' },
+    { url: 'https://cdn.example/720p.m3u8', quality: '720p' },
+    { url: 'https://cdn.example/1080p.m3u8', quality: 'duplicate' },
+    { url: 'javascript:alert(1)', quality: 'invalid' },
+    { url: 'https://cdn.example/720p.m3u8', quality: 'duplicate' }
+  ]).map(video => video.url).join('|');
+
+  assert.equal(urls, 'https://cdn.example/1080p.m3u8|https://cdn.example/720p.m3u8');
 });
