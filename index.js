@@ -13,6 +13,14 @@ function redactSensitive(value) {
 
 const cache = new Map();
 const CACHE_MAX_ENTRIES = 500;
+const PROVIDER_BUDGET_MS = 45000;
+const SEARCH_MAX_PAGES = 5;
+
+function ensureBudget(deadline, stage) {
+  if (deadline && Date.now() >= deadline) {
+    throw new Error('CinemaBox time budget exceeded before ' + stage);
+  }
+}
 
 function cached(key, loader, ttl) {
   if (ttl == null) ttl = 120000;
@@ -48,7 +56,8 @@ function uniqueStreamVideos(videos) {
   });
 }
 
-function request(url) {
+function request(url, deadline) {
+  ensureBudget(deadline, 'HTTP request');
   return fetch(url, {
     headers: {
       Accept: 'application/json',
@@ -72,8 +81,8 @@ function request(url) {
   });
 }
 
-function api(path) {
-  return request(BASE + '/' + path);
+function api(path, deadline) {
+  return request(BASE + '/' + path, deadline);
 }
 
 function normalizeType(value) {
@@ -120,31 +129,31 @@ function releaseYear(value) {
   return match ? match[0] : undefined;
 }
 
-function getDetails(id, seasonId) {
+function getDetails(id, seasonId, deadline) {
   var suffix = seasonId ? '?season_id=' + encodeURIComponent(seasonId) : '';
   var key = 'details-' + id + '-' + (seasonId || 'default');
   return cached(key, function () {
     console.log('[DETAILS FETCH]', 'show:', id, 'seasonId:', seasonId || 'default');
-    return api('shows/shows/dynamic/' + id + suffix);
+    return api('shows/shows/dynamic/' + id + suffix, deadline);
   });
 }
 
-function getPlayer(episodeId) {
+function getPlayer(episodeId, deadline) {
   return cached('player-' + episodeId, function () {
-    return api('shows/episodes/player/' + episodeId);
+    return api('shows/episodes/player/' + episodeId, deadline);
   }, 30000);
 }
 
-function getExternalMeta(type, id) {
+function getExternalMeta(type, id, deadline) {
   return cached('external-' + type + '-' + id, function () {
-    return request(CINEMETA + '/meta/' + type + '/' + encodeURIComponent(id) + '.json').then(function (data) {
+    return request(CINEMETA + '/meta/' + type + '/' + encodeURIComponent(id) + '.json', deadline).then(function (data) {
       if (!data.meta || !data.meta.name) throw new Error('No external metadata for ' + id);
       return data.meta;
     });
   }, 600000);
 }
 
-function searchCinemaBox(title, type, year) {
+function searchCinemaBox(title, type, year, deadline) {
   return cached('search-' + type + '-' + normalizeTitle(title) + '-' + (year || ''), function () {
     var foundItems = new Map();
     var failedPageCount = 0;
@@ -182,12 +191,15 @@ function searchCinemaBox(title, type, year) {
     var pageRequests = new Map();
 
     function fetchSearchPage(term, pageNum) {
+      ensureBudget(deadline, 'search page ' + pageNum);
       var requestKey = String(term) + '::' + pageNum;
       if (pageRequests.has(requestKey)) return pageRequests.get(requestKey);
       var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
       function attempt(retry) {
-        return api('search?' + queryStr).catch(function (error) {
-          if (retry < 1) {
+        return api('search?' + queryStr, deadline).catch(function (error) {
+          var message = String(error && error.message || error);
+          var retryable = !/HTTP (?:400|401|403|404|405|410|422)\b/.test(message);
+          if (retry < 1 && retryable) {
             console.log('[SEARCH PAGE RETRY]', 'term:', term, 'page:', pageNum);
             return attempt(retry + 1);
           }
@@ -233,12 +245,12 @@ function searchCinemaBox(title, type, year) {
     }
 
     function fetchMorePages(term, pageNum) {
-      if (pageNum > 5) return Promise.resolve();
+      if (pageNum > SEARCH_MAX_PAGES) return Promise.resolve();
 
       // Fetch two adjacent pages together to avoid serial network round trips.
       // Keep the same five-page ceiling and the same strong-match stop rule.
       var pageNumbers = [pageNum, pageNum + 1].filter(function (number) {
-        return number <= 5;
+        return number <= SEARCH_MAX_PAGES;
       });
 
       return Promise.all(pageNumbers.map(function (number) {
@@ -338,7 +350,7 @@ function parseExternalId(id) {
   };
 }
 
-function findEpisode(details, showId, seasonNumber, episodeNumber) {
+function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
   var seasonDetails = details;
   var currentSeason = Number((details.post_info && details.post_info.season_number) || 1);
   var seasonPromise = Promise.resolve(seasonDetails);
@@ -371,7 +383,8 @@ function findEpisode(details, showId, seasonNumber, episodeNumber) {
     }
 
     var seasonLoadStart = Date.now();
-    seasonPromise = getDetails(showId, seasonCard.id).then(function (loaded) {
+    ensureBudget(deadline, 'season details');
+    seasonPromise = getDetails(showId, seasonCard.id, deadline).then(function (loaded) {
       console.log('[TIMING] season details:', Date.now() - seasonLoadStart,
         'ms', 'season:', seasonNumber, 'seasonId:', seasonCard.id);
       var loadedSeason = Number((loaded.post_info && loaded.post_info.season_number) || 0);
@@ -412,7 +425,7 @@ function findEpisode(details, showId, seasonNumber, episodeNumber) {
   });
 }
 
-function resolveImdbId(id, mediaType) {
+function resolveImdbId(id, mediaType, deadline) {
   var value = String(id || '').replace(/^imdb:/i, '');
   if (/^tt\d+$/i.test(value)) return Promise.resolve(value);
 
@@ -427,10 +440,10 @@ function resolveImdbId(id, mediaType) {
 
   var auth = '?api_key=' + encodeURIComponent(key);
 
-  return request(detailsUrl + auth).then(function (data) {
+  return request(detailsUrl + auth, deadline).then(function (data) {
     if (data && data.imdb_id) return data.imdb_id;
 
-    return request(detailsUrl + '/external_ids' + auth)
+    return request(detailsUrl + '/external_ids' + auth, deadline)
       .then(function (external) {
         return external && external.imdb_id ? external.imdb_id : null;
       });
@@ -447,7 +460,7 @@ function buildStream(video, displayTitle) {
   };
 }
 
-function fetchStreams(type, id, suppliedMeta) {
+function fetchStreams(type, id, suppliedMeta, deadline) {
   var timingStart = Date.now();
   var stageStart = timingStart;
   var episodeId = null;
@@ -461,7 +474,7 @@ function fetchStreams(type, id, suppliedMeta) {
 
   var metaPromise = suppliedMeta
     ? Promise.resolve(suppliedMeta)
-    : getExternalMeta(type, external.imdbId);
+    : getExternalMeta(type, external.imdbId, deadline);
 
   return metaPromise.then(function (meta) {
     displayTitle = String(meta.name || meta.original_name || external.imdbId);
@@ -474,20 +487,31 @@ function fetchStreams(type, id, suppliedMeta) {
     stageStart = Date.now();
     var year = releaseYear(meta.year);
     
-    return searchCinemaBox(meta.name, type, year).then(function (found) {
+    ensureBudget(deadline, 'primary title search');
+    return searchCinemaBox(meta.name, type, year, deadline).then(function (found) {
       console.log('[TIMING] search:', Date.now() - stageStart, 'ms');
       stageStart = Date.now();
       if (found) return found;
       if (meta.original_name && meta.original_name !== meta.name) {
         console.log('[RETRY WITH ARABIC]', meta.original_name);
-        return searchCinemaBox(meta.original_name, type, year);
+        ensureBudget(deadline, 'original title fallback');
+        return searchCinemaBox(meta.original_name, type, year, deadline);
       }
       return null;
+    }).catch(function (error) {
+      // A network failure on the primary title must not suppress a distinct original-title search.
+      if (meta.original_name && normalizeTitle(meta.original_name) !== normalizeTitle(meta.name)) {
+        console.log('[SEARCH FALLBACK]', 'reason: primary-search-error', redactSensitive(error && error.message || error));
+        ensureBudget(deadline, 'original title fallback after search error');
+        return searchCinemaBox(meta.original_name, type, year, deadline);
+      }
+      throw error;
     });
   })
   .then(function (found) {
     if (!found) return null;
-    return getDetails(found.id).then(function (details) {
+    ensureBudget(deadline, 'show details');
+    return getDetails(found.id, null, deadline).then(function (details) {
       console.log('[TIMING] details:', Date.now() - stageStart, 'ms');
       stageStart = Date.now();
       var post = details.post_info;
@@ -499,7 +523,7 @@ function fetchStreams(type, id, suppliedMeta) {
       }
 
       if (!external.season || !external.episode) return null;
-      return findEpisode(details, found.id, external.season, external.episode);
+      return findEpisode(details, found.id, external.season, external.episode, deadline);
     });
   })
   .then(function (resolvedEpisodeId) {
@@ -509,7 +533,8 @@ function fetchStreams(type, id, suppliedMeta) {
       return { streams: [] };
     }
 
-    return getPlayer(episodeId).then(function (player) {
+    ensureBudget(deadline, 'player lookup');
+    return getPlayer(episodeId, deadline).then(function (player) {
       console.log('[TIMING] player:', Date.now() - stageStart, 'ms');
       var streams = [];
       var playerVideos = Array.isArray(player && player.videos) ? player.videos : [];
@@ -541,7 +566,7 @@ function fetchStreams(type, id, suppliedMeta) {
   });
 }
 
-function getTmdbMetadata(tmdbId, mediaType) {
+function getTmdbMetadata(tmdbId, mediaType, deadline) {
   var kind = (String(mediaType).toLowerCase() === 'tv' || String(mediaType).toLowerCase() === 'series') ? 'tv' : 'movie';
   var key = typeof TMDB_API_KEY !== 'undefined' ? TMDB_API_KEY : '';
   if (!key) return Promise.reject(new Error('TMDB API key is unavailable'));
@@ -551,7 +576,7 @@ function getTmdbMetadata(tmdbId, mediaType) {
     '&append_to_response=external_ids';
 
   return cached('tmdb-meta-' + kind + '-' + tmdbId, function () {
-    return request(url).then(function (data) {
+    return request(url, deadline).then(function (data) {
       var imdbId = data.imdb_id || (data.external_ids && data.external_ids.imdb_id);
       var name = data.title || data.name;
       if (!imdbId || !name) throw new Error('TMDB metadata is incomplete for ' + tmdbId);
@@ -569,6 +594,7 @@ function getTmdbMetadata(tmdbId, mediaType) {
 }
 function getStreamsForNuvio(input, mediaType, season, episode) {
   var requestStart = Date.now();
+  var deadline = requestStart + PROVIDER_BUDGET_MS;
   return Promise.resolve().then(function () {
     var args = input && typeof input === 'object'
       ? input
@@ -598,7 +624,7 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
         if (args.season == null || args.episode == null) return [];
         id += ':' + Number(args.season) + ':' + Number(args.episode);
       }
-      return fetchStreams(oldType, id, meta).then(function (result) {
+      return fetchStreams(oldType, id, meta, deadline).then(function (result) {
         var streams = Array.isArray(result && result.streams) ? result.streams : [];
         console.log('[TIMING] getStreams total:', Date.now() - requestStart, 'ms');
         return streams;
@@ -606,13 +632,14 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
     }
 
     if (/^tt\d+$/i.test(rawId)) {
-      return getExternalMeta(oldType, rawId).then(function (meta) {
+      return getExternalMeta(oldType, rawId, deadline).then(function (meta) {
         return run(rawId, meta);
       });
     }
 
     var tmdbStart = Date.now();
-    return getTmdbMetadata(rawId, rawType).then(function (resolved) {
+    ensureBudget(deadline, 'TMDB metadata');
+    return getTmdbMetadata(rawId, rawType, deadline).then(function (resolved) {
       console.log('[TIMING] TMDB metadata:', Date.now() - tmdbStart, 'ms');
       return run(resolved.imdbId, resolved.meta);
     }).catch(function (error) {
