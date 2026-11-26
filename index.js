@@ -155,7 +155,7 @@ const PLAYER_CACHE_TTL_MS = 30000;
 const SEARCH_CACHE_TTL_MS = 600000;
 const METADATA_CACHE_TTL_MS = 600000;
 const PROVIDER_BUDGET_MS = 45000;
-const SEARCH_MAX_PAGES = 5;
+const SEARCH_MAX_PAGES = 3;
 
 function ensureBudget(deadline, stage) {
   if (deadline && Date.now() >= deadline) {
@@ -537,7 +537,7 @@ function searchCinemaBox(title, type, year, deadline) {
           return count;
         });
         var best = rankItems(Array.from(foundItems.values()));
-        if (best && best.score >= 0.95) {
+        if (best && best.titleScore >= 0.75 && best.score >= 0.75) {
           console.log('[SEARCH STOP]', 'reason: strong-score', 'score:', best.score.toFixed(2));
           return;
         }
@@ -557,7 +557,7 @@ function searchCinemaBox(title, type, year, deadline) {
       var firstCount = firstPage.count;
       var firstBest = firstPage.best;
       var best = rankItems(Array.from(foundItems.values()));
-      if (best && best.score >= 0.95) {
+      if (best && best.titleScore >= 0.75 && best.score >= 0.75) {
         console.log('[SEARCH STOP]', 'reason: first-page-strong-match', 'title:', best.item.title,
           'titleScore:', best.titleScore.toFixed(2), 'score:', best.score.toFixed(2));
         return;
@@ -574,7 +574,7 @@ function searchCinemaBox(title, type, year, deadline) {
       return fallbackSearch.then(function (fallbackPage) {
         var fallbackCount = fallbackPage.count;
         best = rankItems(Array.from(foundItems.values()));
-        if (best && best.score >= 0.95) {
+        if (best && best.titleScore >= 0.75 && best.score >= 0.75) {
           console.log('[SEARCH STOP]', 'reason: fallback-strong-match', 'title:', best.item.title,
             'titleScore:', best.titleScore.toFixed(2), 'score:', best.score.toFixed(2));
           return;
