@@ -115,8 +115,6 @@ function getExternalMeta(type, id) {
 
 function searchCinemaBox(title, type, year) {
   return cached('search-' + type + '-' + normalizeTitle(title) + '-' + (year || ''), function () {
-    var queries = [title];
-    if (year) queries.push(title + ' ' + year);
     var foundItems = new Map();
 
     function rankItems(items) {
