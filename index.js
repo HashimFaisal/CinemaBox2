@@ -476,12 +476,11 @@ function fetchStreams(type, id, suppliedMeta) {
       playerVideos.forEach(function (video) {
         if (video && typeof video.url === 'string' && /^https?:\/\//i.test(video.url)) {
           var quality = video.quality || 'Video';
-          var streamLabel = quality + ' (' + displayTitle + ')';
+          var streamLabel = quality + ' (' + displayTitle + ') CinemaBox';
           streams.push({
             name: streamLabel,
             title: streamLabel,
-            url: video.url,
-            quality: quality
+            url: video.url
           });
         }
       });
