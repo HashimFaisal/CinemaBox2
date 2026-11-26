@@ -436,26 +436,38 @@ function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadlin
     });
   });
 
-  return Promise.all(searches).then(function (results) {
-    var matches = results.filter(function (result) { return !!result.item; });
-    if (matches.length) {
-      matches.sort(function (a, b) {
-        var aScore = titleScore(a.title, a.item.title);
-        var bScore = titleScore(b.title, b.item.title);
-        if (bScore !== aScore) return bScore - aScore;
-        var aYear = year && releaseYear(a.item.year) === year ? 1 : 0;
-        var bYear = year && releaseYear(b.item.year) === year ? 1 : 0;
-        if (bYear !== aYear) return bYear - aYear;
-        return a.index - b.index;
-      });
-      console.log('[SEARCH PARALLEL MATCH]', 'query:', matches[0].title,
-        'title:', matches[0].item.title, 'alternatives:', matches.length);
-      return matches[0].item;
+  // Return the first valid match instead of waiting for every title query.
+  // A slower alternate-title lookup must not delay a usable primary-title result.
+  return new Promise(function (resolve, reject) {
+    var settled = 0;
+    var firstError = null;
+    var completed = false;
+
+    function finishWithoutMatch() {
+      settled++;
+      if (settled !== searches.length || completed) return;
+      completed = true;
+      if (firstError) reject(firstError);
+      else resolve(null);
     }
 
-    var failed = results.filter(function (result) { return !!result.error; });
-    if (failed.length) throw failed[0].error;
-    return null;
+    searches.forEach(function (search) {
+      search.then(function (result) {
+        if (completed) return;
+        if (result.item) {
+          completed = true;
+          console.log('[SEARCH PARALLEL MATCH]', 'query:', result.title,
+            'title:', result.item.title, 'strategy:', 'first-valid-result',
+            'completedQueries:', settled + 1, 'totalQueries:', searches.length);
+          resolve(result.item);
+          return;
+        }
+        finishWithoutMatch();
+      }).catch(function (error) {
+        if (!firstError) firstError = error;
+        finishWithoutMatch();
+      });
+    });
   });
 }
 
