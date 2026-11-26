@@ -346,7 +346,7 @@ function fetchStreams(type, id, suppliedMeta) {
     return getPlayer(episodeId).then(function (player) {
       var streams = [];
       (player.videos || []).forEach(function (video) {
-        if (video.url && /^https?:\\/\\//i.test(video.url)) {
+        if (video.url && (video.url.indexOf('http://') === 0 || video.url.indexOf('https://') === 0)) {
           var quality = video.quality || 'Video';
           streams.push({
             name: 'Cinema Box · ' + quality,
