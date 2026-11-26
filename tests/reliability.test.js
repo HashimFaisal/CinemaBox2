@@ -1060,3 +1060,28 @@ test('localized and original title searches start concurrently', async () => {
   assert.equal(match.title, 'The Matrix',
     'the primary title should win an equal-confidence tie');
 });
+
+
+test('bundled engine skips unsupported providers before creating embedded timeout timers', async () => {
+  const api = loadInternals(() => {});
+  let timerScheduled = false;
+  let providerCalled = false;
+  const engine = api.createProviderEngine({
+    providerTimeoutMs: 5000,
+    setTimeout: () => { timerScheduled = true; return 1; },
+    clearTimeout: () => {},
+    providers: [{
+      id: 'movie-only',
+      supports: context => context.type === 'movie',
+      getStreams: async () => {
+        providerCalled = true;
+        return [];
+      }
+    }]
+  });
+  const result = await engine.getStreams({ type: 'series' });
+  assert.equal(result.providers[0].status, 'unsupported');
+  assert.equal(timerScheduled, false);
+  assert.equal(providerCalled, false);
+  assert.equal(engine.getHealth()['movie-only'].attempts, 0);
+});
