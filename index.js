@@ -124,18 +124,22 @@ function searchCinemaBox(title, type, year) {
       var term = queries[qIndex];
 
       function fetchPage(pageNum) {
-        if (pageNum > 5) return Promise.resolve();
+        if (!Number.isInteger(pageNum) || pageNum < 1 || pageNum > 5) {
+          return Promise.resolve();
+        }
 
         var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
 
         return api('search?' + queryStr).then(function (data) {
-          var results = (data.results || []).filter(function (item) {
+          var pageResults = Array.isArray(data && data.results) ? data.results : [];
+          var results = pageResults.filter(function (item) {
             return normalizeType(item.type) === type;
           });
           results.forEach(function (item) {
             if (item.id) foundItems.set(String(item.id), item);
           });
-          if ((data.results || []).length < 25) return Promise.resolve();
+
+          if (pageResults.length < 25 || pageNum === 5) return Promise.resolve();
           return fetchPage(pageNum + 1);
         }).catch(function (error) {
           console.warn('[SEARCH PAGE ERROR]', term, 'page', pageNum, error && error.message ? error.message : error);
@@ -143,7 +147,7 @@ function searchCinemaBox(title, type, year) {
         });
       }
 
-      return fetchPage().then(function () {
+      return fetchPage(1).then(function () {
         return fetchAllQueries(qIndex + 1);
       });
     }
