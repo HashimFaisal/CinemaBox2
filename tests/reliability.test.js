@@ -17,7 +17,7 @@ function loadInternals(fetchImpl, logger) {
     console: logger || { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, getPlayer, getStreamsForNuvio };',
+    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, getPlayer, getStreamsForNuvio };',
     sandbox,
     { filename: 'index.js' }
   );
@@ -811,4 +811,38 @@ test('Nuvio entry point emits an error-level runtime marker before early exits',
   assert.equal(payload.id, '90228');
   assert.equal(payload.season, -1);
   assert.equal(payload.episode, -1);
+});
+
+
+test('localized and original title searches start concurrently', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const startedTerms = [];
+  const api = loadInternals(url => {
+    const term = new URL(url).searchParams.get('term');
+    startedTerms.push(term);
+    return gate.then(() => ({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({
+        results: [{ id: term, title: term, type: 'MOVIE', year: '2020' }]
+      }))
+    }));
+  });
+
+  const pending = api.searchCinemaBoxTitles(
+    'The Matrix',
+    'ماتريكس',
+    'movie',
+    '2020',
+    Date.now() + 10000
+  );
+
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(startedTerms.sort(), ['The Matrix', 'ماتريكس'].sort(),
+    'both title queries should be in flight before either response resolves');
+
+  release();
+  const match = await pending;
+  assert.equal(match.title, 'The Matrix',
+    'the primary title should win an equal-confidence tie');
 });
