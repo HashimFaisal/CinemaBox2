@@ -198,10 +198,12 @@ function request(url, deadline, timeoutOverride) {
 
   var timeoutPromise = new Promise(function (resolve, reject) {
     timeoutId = setTimeout(function () {
+      // Reject the deadline first so callers consistently receive the timeout
+      // reason even when abort immediately rejects the underlying fetch.
+      reject(new Error('CinemaBox request timeout after ' + timeoutMs + 'ms'));
       if (controller) {
         try { controller.abort(); } catch (error) {}
       }
-      reject(new Error('CinemaBox request timeout after ' + timeoutMs + 'ms'));
     }, timeoutMs);
   });
 
