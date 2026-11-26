@@ -124,6 +124,7 @@ function getDetails(id, seasonId) {
   var suffix = seasonId ? '?season_id=' + encodeURIComponent(seasonId) : '';
   var key = 'details-' + id + '-' + (seasonId || 'default');
   return cached(key, function () {
+    console.log('[DETAILS FETCH]', 'show:', id, 'seasonId:', seasonId || 'default');
     return api('shows/shows/dynamic/' + id + suffix);
   });
 }
@@ -342,6 +343,9 @@ function findEpisode(details, showId, seasonNumber, episodeNumber) {
   var currentSeason = Number((details.post_info && details.post_info.season_number) || 1);
   var seasonPromise = Promise.resolve(seasonDetails);
 
+  console.log('[SEASON RESOLVE]', 'requested:', seasonNumber,
+    'current:', currentSeason, 'requiresSeasonFetch:', seasonNumber !== currentSeason);
+
   if (seasonNumber !== currentSeason) {
     var seasonCards = [];
     (details.sections || []).forEach(function (section) {
@@ -366,7 +370,10 @@ function findEpisode(details, showId, seasonNumber, episodeNumber) {
       return Promise.resolve(null);
     }
 
+    var seasonLoadStart = Date.now();
     seasonPromise = getDetails(showId, seasonCard.id).then(function (loaded) {
+      console.log('[TIMING] season details:', Date.now() - seasonLoadStart,
+        'ms', 'season:', seasonNumber, 'seasonId:', seasonCard.id);
       var loadedSeason = Number((loaded.post_info && loaded.post_info.season_number) || 0);
       if (loadedSeason !== seasonNumber) {
         console.log('[SEASON LOAD MISMATCH]', 'requested:', seasonNumber, 'loaded:', loadedSeason);
@@ -429,6 +436,17 @@ function resolveImdbId(id, mediaType) {
       });
   });
 }
+function buildStream(video, displayTitle) {
+  var quality = video.quality || 'Video';
+  var streamLabel = 'CinemaBox (' + displayTitle + ') ' + quality;
+  return {
+    name: streamLabel,
+    title: streamLabel,
+    url: video.url,
+    quality: quality
+  };
+}
+
 function fetchStreams(type, id, suppliedMeta) {
   var timingStart = Date.now();
   var stageStart = timingStart;
@@ -509,15 +527,11 @@ function fetchStreams(type, id, suppliedMeta) {
           'quality:', video && video.quality ? video.quality : 'unknown');
       });
       uniqueStreamVideos(playerVideos).forEach(function (video) {
-        var quality = video.quality || 'Video';
-        var streamLabel = 'CinemaBox (' + displayTitle + ') ' + quality;
-        streams.push({
-          name: streamLabel,
-          title: streamLabel,
-          url: video.url
-        });
+        streams.push(buildStream(video, displayTitle));
       });
-      console.log('[STREAMS]', type, id, 'episode:', episodeId, 'count:', streams.length, 'total:', Date.now() - timingStart, 'ms');
+      console.log('[STREAMS]', type, id, 'episode:', episodeId,
+        'rawVideos:', playerVideos.length, 'uniqueValid:', streams.length,
+        'total:', Date.now() - timingStart, 'ms');
       return { streams: streams };
     });
   })
