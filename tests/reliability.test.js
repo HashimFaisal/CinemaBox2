@@ -56,6 +56,10 @@ test('bundled provider engine reports rejected streams and recovers after a tran
   assert.equal(recovered.streams.length, 1);
   assert.equal(recovered.streams[0].url, 'https://cdn.example/recovered.mp4');
   assert.equal(engine.getHealth()['bundled-provider'].validStreams, 1);
+  assert.equal(engine.getHealth()['bundled-provider'].emptyResponses, 1);
+  assert.equal(engine.getHealth()['bundled-provider'].errorCount, 1);
+  assert.equal(engine.getHealth()['bundled-provider'].rejectedStreams, 2);
+  assert.equal(engine.getHealth()['bundled-provider'].productiveRate, 1 / 3);
 });
 
 test('bundled provider engine does not count work after an expired shared deadline', async () => {
