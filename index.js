@@ -65,6 +65,9 @@ function cached(key, loader, ttl) {
 function validateStreamUrl(value) {
   if (typeof value !== 'string' || !value || value !== value.trim() ||
       value.indexOf('\\') !== -1 || /\s/.test(value)) return false;
+  // Reject empty authorities before WHATWG URL parsing normalizes malformed slashes.
+  var authorityMatch = value.match(/^https?:\\/\\/([^/?#]+)/i);
+  if (!authorityMatch || !authorityMatch[1]) return false;
   try {
     var parsed = new URL(value);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
