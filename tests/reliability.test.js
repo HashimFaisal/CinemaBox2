@@ -742,7 +742,7 @@ test('TMDB authorization failures are classified and API keys stay redacted', as
 
 test('quality audit explicitly reports 2160p without logging stream URLs', async () => {
   const logs = [];
-  const logger = { log(...args) { logs.push(args.join(' ')); }, error() {} };
+  const logger = { log() {}, error(...args) { logs.push(args.join(' ')); } };
   const api = loadInternals(url => {
     if (url.includes('/search?')) {
       return Promise.resolve({
@@ -763,7 +763,7 @@ test('quality audit explicitly reports 2160p without logging stream URLs', async
         ok: true,
         text: () => Promise.resolve(JSON.stringify({
           videos: [
-            { url: 'https://cdn.example/uhd-secret.mp4?token=private', quality: '2160p' },
+            { url: 'https://cdn.example/uhd-secret.mp4?token=private', quality: '2160p HDR' },
             { url: 'https://cdn.example/fullhd.mp4', quality: '1080p' }
           ]
         }))
@@ -781,7 +781,7 @@ test('quality audit explicitly reports 2160p without logging stream URLs', async
   const audit = logs.find(line => line.includes('[CINEMABOX QUALITY AUDIT]'));
   assert.ok(audit, 'expected explicit quality audit log');
   const payload = JSON.parse(audit.slice(audit.indexOf('{')));
-  assert.deepEqual(Array.from(payload.qualities), ['2160p', '1080p']);
+  assert.deepEqual(Array.from(payload.qualities), ['2160p HDR', '1080p']);
   assert.equal(payload.has2160p, true);
   assert.equal(payload.validUniqueStreams, 2);
   assert.doesNotMatch(audit, /uhd-secret|private/);
