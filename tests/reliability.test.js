@@ -19,12 +19,62 @@ function loadInternals(fetchImpl, logger) {
     console: logger || { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, requestWithRetry, getPlayer, getStreamsForNuvio };',
+    source + '\nmodule.exports.__test = { createProviderEngine, redactSensitive, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, requestWithRetry, getPlayer, getStreamsForNuvio };',
     sandbox,
     { filename: 'index.js' }
   );
   return sandbox.module.exports.__test;
 }
+
+test('bundled provider engine reports rejected streams and recovers after a transient outage', async () => {
+  const api = loadInternals(() => {});
+  let calls = 0;
+  const engine = api.createProviderEngine({
+    providers: [{
+      id: 'bundled-provider',
+      getStreams: async () => {
+        calls += 1;
+        if (calls === 1) return [{ url: '', quality: '1080p' }, { url: 'not-a-url' }];
+        if (calls === 2) throw new Error('temporary provider outage');
+        return [{ url: 'https://cdn.example/recovered.mp4', quality: '1080p' }];
+      }
+    }]
+  });
+
+  const empty = await engine.getStreams({});
+  assert.equal(empty.providers[0].status, 'empty');
+  assert.equal(empty.providers[0].rawStreams, 2);
+  assert.equal(empty.providers[0].rejectedStreams, 2);
+  assert.equal(empty.providers[0].rejectionReasons['missing-url'], 1);
+  assert.equal(empty.providers[0].rejectionReasons['invalid-url'], 1);
+
+  const failed = await engine.getStreams({});
+  assert.equal(failed.providers[0].status, 'error');
+
+  const recovered = await engine.getStreams({});
+  assert.equal(recovered.providers[0].status, 'ok');
+  assert.equal(recovered.streams.length, 1);
+  assert.equal(recovered.streams[0].url, 'https://cdn.example/recovered.mp4');
+  assert.equal(engine.getHealth()['bundled-provider'].validStreams, 1);
+});
+
+test('bundled provider engine does not count work after an expired shared deadline', async () => {
+  const api = loadInternals(() => {});
+  let calls = 0;
+  const engine = api.createProviderEngine({
+    providers: [{
+      id: 'expired-provider',
+      getStreams: async () => {
+        calls += 1;
+        return [];
+      }
+    }]
+  });
+  const result = await engine.getStreams({ deadline: Date.now() - 1 });
+  assert.equal(result.providers[0].status, 'deadline-exceeded');
+  assert.equal(calls, 0);
+  assert.equal(engine.getHealth()['expired-provider'].attempts, 0);
+});
 
 test('HTTP timing diagnostics report endpoint and duration without query secrets', async () => {
   const logs = [];
