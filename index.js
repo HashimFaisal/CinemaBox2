@@ -5,7 +5,7 @@ const CINEMETA = 'https://v3-cinemeta.strem.io';
 
 function redactSensitive(value) {
   var text = String(value == null ? '' : value)
-    .replace(/([?&]api_key=)[^&\\s]*/gi, '$1[REDACTED]');
+    .replace(/([?&]api_key=)[^&]*/gi, '$1[REDACTED]');
   var key = typeof TMDB_API_KEY !== 'undefined' ? String(TMDB_API_KEY || '') : '';
   if (key) text = text.split(key).join('[REDACTED]');
   return text;
