@@ -37,22 +37,53 @@ test('Internet Archive diagnostics use the warning logger and include raw search
       }
     })
   }), {
-    warn(...args) { warnings.push(args.join(' ')); },
-    log() {},
-    error() {}
+    error(...args) { warnings.push(args.join(' ')); },
+    warn() {},
+    log() {}
   });
   const provider = api.createInternetArchiveProvider();
   await provider.getStreams({ type: 'movie', meta: { name: 'Other Title', year: '1926' } });
   const line = warnings.find(item =>
     item.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && item.includes('"stage":"search-complete"')
   );
-  assert.ok(line, 'expected diagnostics to use console.warn when available');
+  assert.ok(line, 'expected diagnostics to use console.error so Nuvio exposes them');
   const payload = JSON.parse(line.slice(line.indexOf('{')));
   assert.equal(payload.reportedTotal, 1);
   assert.equal(payload.rawResults, 1);
   assert.deepEqual(payload.sampleDocs, [
     { identifier: 'thegeneral', title: 'The General', year: '1926' }
   ]);
+  assert.equal(payload.candidates, 0);
+  assert.deepEqual(payload.searchShape.topLevelKeys, ['response']);
+  assert.equal(payload.searchShape.docsFieldType, 'array');
+});
+
+test('Internet Archive diagnostics expose malformed or error-shaped search payloads', async () => {
+  const logs = [];
+  const api = loadInternals(() => Promise.resolve({
+    ok: true,
+    json: async () => ({
+      error: 'advanced search temporarily unavailable',
+      response: { status: 400, message: 'query rejected', docs: null }
+    })
+  }), { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
+  const provider = api.createInternetArchiveProvider();
+  const streams = await provider.getStreams({
+    type: 'movie',
+    meta: { name: 'Diagnostic Target', year: '2024' }
+  });
+  assert.equal(streams.length, 0);
+  const line = logs.find(item =>
+    item.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && item.includes('"stage":"search-complete"')
+  );
+  assert.ok(line, 'expected an error-level search diagnostic');
+  const payload = JSON.parse(line.slice(line.indexOf('{')));
+  assert.deepEqual(payload.searchShape.topLevelKeys, ['error', 'response']);
+  assert.deepEqual(payload.searchShape.responseKeys, ['status', 'message', 'docs']);
+  assert.equal(payload.searchShape.docsFieldType, 'missing-or-null');
+  assert.equal(payload.searchShape.responseError, 'advanced search temporarily unavailable');
+  assert.equal(payload.searchShape.responseMessage, 'query rejected');
+  assert.equal(payload.rawResults, 0);
   assert.equal(payload.candidates, 0);
 });
 
@@ -61,7 +92,7 @@ test('Internet Archive adapter diagnoses empty search results', async () => {
   const api = loadInternals(() => Promise.resolve({
     ok: true,
     json: async () => ({ response: { docs: [] } })
-  }), { log(...args) { logs.push(args.join(' ')); }, error() {} });
+  }), { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
   const provider = api.createInternetArchiveProvider();
   const streams = await provider.getStreams({ type: 'movie', meta: { name: 'Unavailable Film', year: '2024' } });
   assert.equal(streams.length, 0);
@@ -109,7 +140,7 @@ test('Internet Archive adapter returns a valid public-domain video and explains 
       })
     });
     throw new Error('Unexpected URL: ' + url);
-  }, { log(...args) { logs.push(args.join(' ')); }, error() {} });
+  }, { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
   const provider = api.createInternetArchiveProvider();
   const streams = await provider.getStreams({
     type: 'movie',
