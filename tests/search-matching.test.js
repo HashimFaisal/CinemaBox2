@@ -52,6 +52,16 @@ test('same-title editions prefer the candidate with the requested release year',
   assert.equal(result.id, 1982);
 });
 
+test('candidate with unknown release year remains eligible without inventing year metadata', async () => {
+  const api = loadSearch(() => Promise.resolve(response([
+    { id: 1982, title: 'The Thing', type: 'MOVIE' }
+  ])));
+
+  const result = await api.searchCinemaBox('The Thing', 'movie', '1982', Date.now() + 5000);
+  assert.equal(result.id, 1982);
+  assert.equal(result.year, undefined);
+});
+
 test('Arabic diacritics and common letter variants normalize consistently', () => {
   const api = loadSearch(() => Promise.resolve(response([])));
   assert.equal(api.normalizeTitle('القَاهِرَة'), api.normalizeTitle('القاهره'));
