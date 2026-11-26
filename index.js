@@ -147,7 +147,11 @@ function searchCinemaBox(title, type, year) {
       return ranked[0] || null;
     }
 
+    var pageRequests = new Map();
+
     function fetchSearchPage(term, pageNum) {
+      var requestKey = normalizeTitle(term) + '::' + pageNum;
+      if (pageRequests.has(requestKey)) return pageRequests.get(requestKey);
       var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
       function attempt(retry) {
         return api('search?' + queryStr).catch(function (error) {
@@ -160,32 +164,38 @@ function searchCinemaBox(title, type, year) {
           return null;
         });
       }
-      return attempt(0);
+      var pending = attempt(0);
+      pageRequests.set(requestKey, pending);
+      return pending;
     }
 
-    function addResults(data) {
+    function addResults(data, termItems) {
       var pageResults = Array.isArray(data && data.results) ? data.results : [];
       pageResults.filter(function (item) {
         return normalizeType(item.type) === type;
       }).forEach(function (item) {
-        if (item.id) foundItems.set(String(item.id), item);
+        if (item.id) {
+          foundItems.set(String(item.id), item);
+          if (termItems) termItems.set(String(item.id), item);
+        }
       });
       return pageResults.length;
     }
 
     // ابدأ ببحث الاسم فقط؛ استخدم الاسم مع السنة كاحتياط عند غياب التطابق القوي.
     function fetchFirstPage(term) {
+      var termItems = new Map();
       return fetchSearchPage(term, 1).then(function (data) {
         var before = foundItems.size;
-        var count = data ? addResults(data) : 0;
-        var best = rankItems(Array.from(foundItems.values()));
+        var count = data ? addResults(data, termItems) : 0;
+        var best = rankItems(Array.from(termItems.values()));
         console.log('[SEARCH PAGE]', 'term:', term, 'page:', 1, 'returned:', count,
           'newUnique:', foundItems.size - before,
           'best:', best ? best.item.title : 'none',
           'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
           'score:', best ? best.score.toFixed(2) : 'n/a',
           'year:', best ? (best.resultYear || 'unknown') : 'n/a');
-        return count;
+        return { count: count, best: best };
       });
     }
 
@@ -231,7 +241,9 @@ function searchCinemaBox(title, type, year) {
       });
     }
 
-    return fetchFirstPage(title).then(function (firstCount) {
+    return fetchFirstPage(title).then(function (firstPage) {
+      var firstCount = firstPage.count;
+      var firstBest = firstPage.best;
       var best = rankItems(Array.from(foundItems.values()));
       if (best && best.score >= 0.95) {
         console.log('[SEARCH STOP]', 'reason: first-page-strong-match', 'title:', best.item.title,
@@ -245,9 +257,10 @@ function searchCinemaBox(title, type, year) {
         'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
         'score:', best ? best.score.toFixed(2) : 'n/a');
       var fallbackTerm = year ? title + ' ' + year : null;
-      var fallbackSearch = fallbackTerm ? fetchFirstPage(fallbackTerm) : Promise.resolve(0);
+      var fallbackSearch = fallbackTerm ? fetchFirstPage(fallbackTerm) : Promise.resolve({ count: 0, best: null });
 
-      return fallbackSearch.then(function (fallbackCount) {
+      return fallbackSearch.then(function (fallbackPage) {
+        var fallbackCount = fallbackPage.count;
         best = rankItems(Array.from(foundItems.values()));
         if (best && best.score >= 0.95) {
           console.log('[SEARCH STOP]', 'reason: fallback-strong-match', 'title:', best.item.title,
@@ -259,10 +272,15 @@ function searchCinemaBox(title, type, year) {
           'best:', best ? best.item.title : 'none',
           'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
           'score:', best ? best.score.toFixed(2) : 'n/a');
-        var pending = [];
-        if (firstCount >= 25) pending.push(fetchMorePages(title, 2));
-        if (fallbackTerm && fallbackCount >= 25) pending.push(fetchMorePages(fallbackTerm, 2));
-        return Promise.all(pending);
+        // Paginate only the first-page query that produced the better candidate.
+        // This avoids expanding both the plain-title and year-fallback searches.
+        var useFallback = fallbackTerm && fallbackCount >= 25 &&
+          (!firstCount || (fallbackPage.best &&
+            (!firstBest || fallbackPage.best.score > firstBest.score)));
+        var paginationTerm = useFallback ? fallbackTerm : title;
+        var paginationCount = useFallback ? fallbackCount : firstCount;
+        if (paginationCount >= 25) return fetchMorePages(paginationTerm, 2);
+        return Promise.resolve();
       });
     }).then(function () {
       var best = rankItems(Array.from(foundItems.values()));
