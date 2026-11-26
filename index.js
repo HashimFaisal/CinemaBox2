@@ -103,13 +103,13 @@ var createProviderEngine = (function () {
         }
         console.log('[ENGINE TRACE] provider-settled', provider.id, 'elapsedMs:', now() - providerStartedAt, 'timedOut:', timedOut);
         const elapsedMs = Math.max(0, now() - providerStartedAt);
-        state.successes += 1;
         state.failures = 0;
         state.openUntil = 0;
-        state.lastStatus = 'ok';
         state.latencyEwmaMs = state.latencyEwmaMs == null ? elapsedMs : (state.latencyEwmaMs * 0.7) + (elapsedMs * 0.3);
         const raw = Array.isArray(result) ? result : (result && Array.isArray(result.streams) ? result.streams : []);
         const streams = raw.map(item => normalizeStream(item, provider)).filter(Boolean);
+        if (streams.length > 0) state.successes += 1;
+        state.lastStatus = streams.length > 0 ? 'ok' : 'empty';
         state.validStreams += streams.length;
         return { providerId: provider.id, status: 'ok', elapsedMs: elapsedMs, streams: streams };
       } catch (error) {
