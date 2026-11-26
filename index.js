@@ -85,6 +85,9 @@ var createProviderEngine = (function () {
     async function runOne(provider, context) {
       const state = health.get(provider.id);
       if (provider.enabled === false) return { providerId: provider.id, status: 'disabled', streams: [] };
+      if (typeof provider.supports === 'function' && !provider.supports(context)) {
+        return { providerId: provider.id, status: 'unsupported', streams: [] };
+      }
       if (state.openUntil > now()) return { providerId: provider.id, status: 'circuit-open', streams: [] };
       const providerTimeoutMs = Math.max(100, Number(provider.timeoutMs) || defaultTimeoutMs);
       const deadline = Math.min(Number.isFinite(context.deadline) ? context.deadline : Infinity, now() + providerTimeoutMs);
@@ -1220,7 +1223,14 @@ function createInternetArchiveProvider(options) {
     return streams.slice(0, 3);
   }
 
-  return { id: 'internet-archive', name: 'Internet Archive', getStreams: getStreams };
+  return {
+    id: 'internet-archive',
+    name: 'Internet Archive',
+    supports: function (context) {
+      return String(context && context.type || '').toLowerCase() === 'movie';
+    },
+    getStreams: getStreams
+  };
 }
 
 
