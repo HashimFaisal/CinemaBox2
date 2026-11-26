@@ -142,6 +142,7 @@ function diagnostic(stage, code, type, id, error) {
 function request(url, deadline) {
   ensureBudget(deadline, 'HTTP request');
   var requestStart = Date.now();
+  var timingLogged = false;
   var requestLabel = 'unknown';
   try {
     var parsedUrl = new URL(url);
@@ -161,6 +162,7 @@ function request(url, deadline) {
   })
   .then(function (response) {
     return response.text().then(function (body) {
+      timingLogged = true;
       console.log('[HTTP TIMING]', requestLabel, 'status:', response.status,
         'ms:', Date.now() - requestStart, 'bytes:', body.length);
       if (!response.ok) {
@@ -174,8 +176,10 @@ function request(url, deadline) {
     });
   })
   .catch(function (error) {
-    console.log('[HTTP TIMING]', requestLabel, 'status: failed',
-      'ms:', Date.now() - requestStart);
+    if (!timingLogged) {
+      console.log('[HTTP TIMING]', requestLabel, 'status: failed',
+        'ms:', Date.now() - requestStart);
+    }
     throw error;
   });
 }
