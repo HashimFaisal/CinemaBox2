@@ -40,7 +40,7 @@ function cached(key, loader, ttl) {
 function uniqueStreamVideos(videos) {
   var seen = new Set();
   return (Array.isArray(videos) ? videos : []).filter(function (video) {
-    if (!video || typeof video.url !== 'string' || !/^https?:\\/\\//i.test(video.url)) return false;
+    if (!video || typeof video.url !== 'string' || !/^https?:\/\//i.test(video.url)) return false;
     if (seen.has(video.url)) return false;
     seen.add(video.url);
     return true;
