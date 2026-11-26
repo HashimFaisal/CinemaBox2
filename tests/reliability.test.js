@@ -20,7 +20,7 @@ function loadInternals(fetchImpl, logger) {
     console: logger || { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, logStageMetric, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, streamQualityRank, streamHealthScore, rankStreamVideos, findEpisode, buildStream, fetchStreams, ensureBudget, request, requestWithRetry, getPlayer, getStreamsForNuvio };',
+    source + '\nmodule.exports.__test = { redactSensitive, logStageMetric, hasRequestHeadroom, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, streamQualityRank, streamHealthScore, rankStreamVideos, findEpisode, buildStream, fetchStreams, ensureBudget, request, requestWithRetry, getPlayer, getStreamsForNuvio };',
     sandbox,
     { filename: 'index.js' }
   );
@@ -705,6 +705,30 @@ test('UHD provider labels normalize to Nuvio 2160p while preserving HDR labels',
 });
 
 
+
+test('transient retries are skipped when the provider deadline cannot fit another request', async () => {
+  let calls = 0;
+  const logs = [];
+  const api = loadInternals(() => {
+    calls++;
+    return Promise.resolve({
+      ok: false,
+      status: 503,
+      text: () => Promise.resolve('temporarily unavailable')
+    });
+  }, {
+    log(...args) { logs.push(args.join(' ')); },
+    error() {}
+  });
+
+  await assert.rejects(
+    api.requestWithRetry('https://api.example.test/retry', Date.now() + 100, 1),
+    /HTTP 503/
+  );
+  assert.equal(calls, 1, 'must not start a retry without enough remaining budget');
+  assert.ok(logs.some(line => line.includes('[REQUEST SKIP]') &&
+    line.includes('insufficient-provider-budget')));
+});
 
 test('player lookup retries one transient network failure and then succeeds', async () => {
   let calls = 0;
