@@ -46,7 +46,7 @@ function createProviderEngine(options) {
   const config = options || {};
   const providers = Array.isArray(config.providers) ? config.providers.slice() : [];
   const concurrency = Math.max(1, Math.floor(config.maxConcurrency || 3));
-  const timeoutMs = Math.max(100, config.providerTimeoutMs || 8000);
+  const defaultTimeoutMs = Math.max(100, config.providerTimeoutMs || 8000);
   const failureThreshold = Math.max(1, Math.floor(config.failureThreshold || 2));
   const cooldownMs = Math.max(100, config.cooldownMs || 30000);
   const now = config.now || Date.now;
@@ -64,7 +64,8 @@ function createProviderEngine(options) {
     const state = health.get(provider.id);
     if (provider.enabled === false) return { providerId: provider.id, status: 'disabled', streams: [] };
     if (state.openUntil > now()) return { providerId: provider.id, status: 'circuit-open', streams: [] };
-    const deadline = Math.min(Number.isFinite(context.deadline) ? context.deadline : Infinity, now() + timeoutMs);
+    const providerTimeoutMs = Math.max(100, Number(provider.timeoutMs) || defaultTimeoutMs);
+    const deadline = Math.min(Number.isFinite(context.deadline) ? context.deadline : Infinity, now() + providerTimeoutMs);
     if (deadline <= now()) return { providerId: provider.id, status: 'deadline-exceeded', streams: [] };
 
     let timer;
