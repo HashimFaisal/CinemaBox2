@@ -786,3 +786,29 @@ test('quality audit explicitly reports 2160p without logging stream URLs', async
   assert.equal(payload.validUniqueStreams, 2);
   assert.doesNotMatch(audit, /uhd-secret|private/);
 });
+
+
+test('Nuvio entry point emits an error-level runtime marker before early exits', async () => {
+  const logs = [];
+  const logger = { log() {}, error(...args) { logs.push(args.join(' ')); } };
+  const api = loadInternals(() => {
+    throw new Error('no network request should be made for an unselected episode');
+  }, logger);
+
+  const result = await api.getStreamsForNuvio({
+    tmdbId: '90228',
+    mediaType: 'tv',
+    season: -1,
+    episode: -1
+  });
+
+  assert.deepEqual(Array.from(result), []);
+  const marker = logs.find(line => line.includes('[CINEMABOX RUNTIME]'));
+  assert.ok(marker, 'expected a runtime marker at plugin entry');
+  const payload = JSON.parse(marker.slice(marker.indexOf('{')));
+  assert.equal(payload.stage, 'start');
+  assert.equal(payload.mediaType, 'tv');
+  assert.equal(payload.id, '90228');
+  assert.equal(payload.season, -1);
+  assert.equal(payload.episode, -1);
+});
