@@ -79,7 +79,7 @@ test('public Nuvio entry point resolves season zero specials and preserves all t
     throw new Error('Unexpected URL: ' + url);
   });
 
-  const streams = await api.getStreams({
+  const streams = await api.getStreamsForNuvio({
     tmdbId: 'tt1234567',
     mediaType: 'series',
     season: 0,
