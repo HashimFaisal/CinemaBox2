@@ -26,8 +26,8 @@ function loadInternals(fetchImpl, logger) {
   return sandbox.module.exports.__test;
 }
 
-test('Internet Archive diagnostics use the runtime-visible error logger and include raw search evidence', async () => {
-  const warnings = [];
+test('Internet Archive diagnostics use Nuvio's visible log channel and include raw search evidence', async () => {
+  const diagnostics = [];
   const api = loadInternals(() => Promise.resolve({
     ok: true,
     json: async () => ({
@@ -37,16 +37,16 @@ test('Internet Archive diagnostics use the runtime-visible error logger and incl
       }
     })
   }), {
-    error(...args) { warnings.push(args.join(' ')); },
+    error() {},
     warn() {},
-    log() {}
+    log(...args) { diagnostics.push(args.join(' ')); }
   });
   const provider = api.createInternetArchiveProvider();
   await provider.getStreams({ type: 'movie', meta: { name: 'Other Title', year: '1926' } });
-  const line = warnings.find(item =>
+  const line = diagnostics.find(item =>
     item.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && item.includes('"stage":"search-complete"')
   );
-  assert.ok(line, 'expected diagnostics to use console.error so Nuvio exposes them');
+  assert.ok(line, 'expected diagnostics on console.log so they appear with scraper traces');
   const payload = JSON.parse(line.slice(line.indexOf('{')));
   assert.equal(payload.reportedTotal, 1);
   assert.equal(payload.rawResults, 1);
@@ -66,7 +66,7 @@ test('Internet Archive diagnostics expose malformed or error-shaped search paylo
       error: 'advanced search temporarily unavailable',
       response: { status: 400, message: 'query rejected', docs: null }
     })
-  }), { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
+  }), { error() {}, warn() {}, log(...args) { logs.push(args.join(' ')); } });
   const provider = api.createInternetArchiveProvider();
   const streams = await provider.getStreams({
     type: 'movie',
@@ -76,7 +76,7 @@ test('Internet Archive diagnostics expose malformed or error-shaped search paylo
   const line = logs.find(item =>
     item.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && item.includes('"stage":"search-complete"')
   );
-  assert.ok(line, 'expected an error-level search diagnostic');
+  assert.ok(line, 'expected a log-channel search diagnostic');
   const payload = JSON.parse(line.slice(line.indexOf('{')));
   assert.deepEqual(payload.searchShape.topLevelKeys, ['error', 'response']);
   assert.deepEqual(payload.searchShape.responseKeys, ['status', 'message', 'docs']);
