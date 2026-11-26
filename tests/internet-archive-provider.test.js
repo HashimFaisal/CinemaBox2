@@ -56,6 +56,8 @@ test('does not query Internet Archive for TV episodes or mismatched titles', asy
   const provider = createInternetArchiveProvider({
     fetch: async function () { calls++; throw new Error('should not be called'); }
   });
+  assert.equal(provider.supports({ type: 'series' }), false);
+  assert.equal(provider.supports({ type: 'movie' }), true);
   assert.deepEqual(await provider.getStreams({ type: 'series', meta: { name: 'Example' } }), []);
   assert.deepEqual(await provider.getStreams({ type: 'movie', meta: {} }), []);
   assert.equal(calls, 0);
