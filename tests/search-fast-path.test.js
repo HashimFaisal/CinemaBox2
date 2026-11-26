@@ -50,7 +50,7 @@ test('returns streams as soon as the first strong title query completes', async 
     assert.equal(streams.length, 1);
     assert.equal(streams[0].quality, '1080p');
     assert.ok(elapsedMs < 500, 'first strong match should not wait for the slower alternate title query');
-    assert.ok(calls.some(call => call.includes('term=Fast+Path+Movie')));
+    assert.ok(calls.some(call => call.includes('term=Fast Path Movie')));
   } finally {
     global.fetch = originalFetch;
   }
