@@ -179,16 +179,18 @@ function searchCinemaBox(title, type, year) {
 
       return Promise.all(pageNumbers.map(function (number) {
         var queryStr = 'page_size=25&page_number=' + number + '&term=' + encodeURIComponent(term);
-        return api('search?' + queryStr).then(function (data) {
-          var count = addResults(data);
-          console.log('[SEARCH PAGE]', 'term:', term, 'page:', number, 'returned:', count);
-          return count;
-        }).catch(function (error) {
+        return api('search?' + queryStr).catch(function (error) {
           console.warn('[SEARCH PAGE ERROR]', term, 'page', number,
             error && error.message ? error.message : error);
-          return 0;
+          return null;
         });
-      })).then(function (counts) {
+      })).then(function (pages) {
+        // Merge in page order so equal-score tie-breaking remains deterministic.
+        var counts = pages.map(function (data, index) {
+          var count = data ? addResults(data) : 0;
+          console.log('[SEARCH PAGE]', 'term:', term, 'page:', pageNumbers[index], 'returned:', count);
+          return count;
+        });
         var best = rankItems(Array.from(foundItems.values()));
         if (best && best.score >= 0.95) {
           console.log('[SEARCH STOP]', 'reason: strong-score', 'score:', best.score.toFixed(2));
