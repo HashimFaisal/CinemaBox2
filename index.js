@@ -77,6 +77,7 @@ var createProviderEngine = (function () {
           typeof provider.getStreams !== 'function') throw new TypeError('Invalid provider contract');
       if (!health.has(provider.id)) health.set(provider.id, {
         failures: 0, openUntil: 0, attempts: 0, successes: 0, validStreams: 0,
+        emptyResponses: 0, errorCount: 0, timeoutCount: 0, rejectedStreams: 0,
         latencyEwmaMs: null, lastStatus: 'never', lastCooldownMs: 0
       });
     });
@@ -127,7 +128,9 @@ var createProviderEngine = (function () {
           }
         });
         const rejectedStreams = raw.length - streams.length;
+        state.rejectedStreams += rejectedStreams;
         if (streams.length > 0) state.successes += 1;
+        else state.emptyResponses += 1;
         state.lastStatus = streams.length > 0 ? 'ok' : 'empty';
         state.validStreams += streams.length;
         return {
@@ -144,6 +147,8 @@ var createProviderEngine = (function () {
         if (timer !== undefined) cancel(timer);
         const elapsedMs = Math.max(0, now() - providerStartedAt);
         state.failures += 1;
+        state.errorCount += 1;
+        if (timedOut) state.timeoutCount += 1;
         state.lastStatus = timedOut ? 'timeout' : 'error';
         state.latencyEwmaMs = state.latencyEwmaMs == null ? elapsedMs : (state.latencyEwmaMs * 0.7) + (elapsedMs * 0.3);
         if (state.failures >= failureThreshold) {
@@ -204,6 +209,9 @@ var createProviderEngine = (function () {
           cooldownMs: state.lastCooldownMs,
           attempts: state.attempts, successes: state.successes,
           successRate: state.attempts ? state.successes / state.attempts : null,
+          productiveRate: state.attempts ? state.successes / state.attempts : null,
+          emptyResponses: state.emptyResponses, errorCount: state.errorCount,
+          timeoutCount: state.timeoutCount, rejectedStreams: state.rejectedStreams,
           validStreams: state.validStreams, latencyEwmaMs: state.latencyEwmaMs,
           lastStatus: state.lastStatus
         };
@@ -1342,7 +1350,11 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
               elapsedMs: provider.elapsedMs == null ? null : provider.elapsedMs,
               attempts: health.attempts == null ? 0 : health.attempts,
               successes: health.successes == null ? 0 : health.successes,
-              successRate: health.successRate,
+              productiveRate: health.productiveRate,
+              emptyResponses: health.emptyResponses == null ? 0 : health.emptyResponses,
+              errorCount: health.errorCount == null ? 0 : health.errorCount,
+              timeoutCount: health.timeoutCount == null ? 0 : health.timeoutCount,
+              rejectedStreams: health.rejectedStreams == null ? 0 : health.rejectedStreams,
               validStreams: health.validStreams == null ? 0 : health.validStreams,
               latencyEwmaMs: health.latencyEwmaMs,
               lastStatus: health.lastStatus || provider.status,
