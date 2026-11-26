@@ -137,7 +137,7 @@ var createProviderEngine = (function () {
         if (rank) return rank;
         const pa = providers.find(item => item.id === a.providerId);
         const pb = providers.find(item => item.id === b.providerId);
-        return Number(pa && pa.priority || 0) - Number(pb && pb.priority || 0);
+        return Number(pb && pb.priority || 0) - Number(pa && pa.priority || 0);
       });
       return { streams: streams, providers: results };
     }
