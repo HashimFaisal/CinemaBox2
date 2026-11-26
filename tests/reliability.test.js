@@ -289,3 +289,50 @@ test('successful empty primary search uses original title only once', async () =
   assert.deepEqual(Array.from(result.streams), []);
   assert.equal(originalCalls, 2, 'one original-title search with one transient retry is expected');
 });
+
+test('missing initial season metadata forces an explicit season fetch', async () => {
+  const requests = [];
+  const api = loadInternals((url) => {
+    requests.push(url);
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({
+        post_info: { season_number: 3 },
+        sections: [{
+          section_type: 'episodes',
+          data: [{ id: 'episode-301', card_type: 'episode', description: '1' }]
+        }]
+      }))
+    });
+  });
+
+  const initialDetails = {
+    post_info: {},
+    sections: [{
+      data: [{ id: 'season-3-id', card_type: 'seasonposter', title: 'Season 3' }]
+    }]
+  };
+
+  const episodeId = await api.findEpisode(initialDetails, 'show-123', 3, 1);
+  assert.equal(episodeId, 'episode-301');
+  assert.equal(requests.length, 1, 'unknown initial season must not be assumed to be season 1');
+  assert.match(requests[0], /season_id=season-3-id/);
+});
+
+test('mixed numbered and unnumbered episode cards never use positional fallback', async () => {
+  const api = loadInternals(() => { throw new Error('unexpected season fetch'); });
+  const details = {
+    post_info: { season_number: 1 },
+    sections: [{
+      section_type: 'episodes',
+      data: [
+        { id: 'episode-1', card_type: 'episode', description: 'Episode 1' },
+        { id: 'unknown-episode', card_type: 'episode', description: '' },
+        { id: 'episode-3', card_type: 'episode', description: '3' }
+      ]
+    }]
+  };
+
+  assert.equal(await api.findEpisode(details, 'show-123', 1, 2), null);
+  assert.equal(await api.findEpisode(details, 'show-123', 1, 3), 'episode-3');
+});
