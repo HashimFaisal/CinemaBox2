@@ -40,4 +40,4 @@ This branch is experimental. The official `main` version 2.1.7, manifest, releas
 A separate root-level `manifest.next-test.json` uses the unique add-on ID `cinemabox-next-test` and prerelease label `2.1.7-next.3`. It points to the branch's `index.js` and is intended for side-by-side validation without replacing the official CinemaBox add-on. This test manifest is not the official `manifest.json` and must not be published as a stable release.
 
 Test manifest URL:
-`https://raw.githubusercontent.com/HashimFaisal/CinemaBox2/engine/cinemabox-next-provider-core/manifest.next-test.json`
+`https://raw.githubusercontent.com/HashimFaisal/CinemaBox2/engine/cinemabox-next-v2/manifest.next-test.json`
