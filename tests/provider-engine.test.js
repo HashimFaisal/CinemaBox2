@@ -53,6 +53,45 @@ test('opens a provider circuit after repeated failures without blocking healthy 
   assert.equal((await engine.getStreams({})).providers[0].status, 'error');
 });
 
+test('applies capped exponential cooldown after repeated provider failures', async () => {
+  let clock = 1000;
+  const engine = createProviderEngine({
+    now: () => clock,
+    failureThreshold: 2,
+    cooldownMs: 500,
+    maxCooldownMs: 2000,
+    providers: [{
+      id: 'recovering',
+      skipTimeoutTimer: true,
+      getStreams: async () => { throw new Error('offline'); }
+    }]
+  });
+
+  await engine.getStreams({});
+  await engine.getStreams({});
+  let health = engine.getHealth().recovering;
+  assert.equal(health.cooldownMs, 500);
+  assert.equal(health.retryAt, 1500);
+
+  clock = 1501;
+  await engine.getStreams({});
+  health = engine.getHealth().recovering;
+  assert.equal(health.cooldownMs, 1000);
+  assert.equal(health.retryAt, 2501);
+
+  clock = 2502;
+  await engine.getStreams({});
+  health = engine.getHealth().recovering;
+  assert.equal(health.cooldownMs, 2000);
+  assert.equal(health.retryAt, 4502);
+
+  clock = 4503;
+  await engine.getStreams({});
+  health = engine.getHealth().recovering;
+  assert.equal(health.cooldownMs, 2000);
+  assert.equal(health.retryAt, 6503);
+});
+
 test('disabled providers are skipped and empty responses remain valid', async () => {
   const engine = createProviderEngine({ providers: [
     { id: 'off', enabled: false, getStreams: async () => { throw new Error('must not run'); } },
