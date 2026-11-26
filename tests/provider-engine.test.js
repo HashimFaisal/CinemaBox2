@@ -170,6 +170,52 @@ test('empty or invalid provider results expose rejection diagnostics', async () 
   assert.equal(health.lastStatus, 'empty');
 });
 
+test('recovers after empty and failed responses without penalizing healthy providers', async () => {
+  let attempts = 0;
+  const engine = createProviderEngine({
+    failureThreshold: 3,
+    providers: [
+      {
+        id: 'recovering',
+        getStreams: async () => {
+          attempts += 1;
+          if (attempts === 1) return { streams: [] };
+          if (attempts === 2) throw new Error('temporary outage');
+          return [{ url: 'https://cdn.example/recovered.mp4', quality: '1080p' }];
+        }
+      },
+      {
+        id: 'healthy',
+        getStreams: async () => [{ url: 'https://cdn.example/always-on.mp4', quality: '720p' }]
+      }
+    ]
+  });
+
+  const empty = await engine.getStreams({});
+  assert.equal(empty.providers[0].status, 'empty');
+  assert.equal(empty.providers[1].status, 'ok');
+  assert.equal(empty.streams.length, 1);
+
+  const failed = await engine.getStreams({});
+  assert.equal(failed.providers[0].status, 'error');
+  assert.equal(failed.providers[1].status, 'ok');
+  assert.equal(failed.streams.length, 1);
+
+  const recovered = await engine.getStreams({});
+  assert.equal(recovered.providers[0].status, 'ok');
+  assert.equal(recovered.providers[1].status, 'ok');
+  assert.deepEqual(recovered.streams.map(stream => stream.url), [
+    'https://cdn.example/recovered.mp4',
+    'https://cdn.example/always-on.mp4'
+  ]);
+  const health = engine.getHealth().recovering;
+  assert.equal(health.attempts, 3);
+  assert.equal(health.successes, 1);
+  assert.equal(health.failures, 0);
+  assert.equal(health.lastStatus, 'ok');
+  assert.equal(health.validStreams, 1);
+});
+
 test('quality rank handles UHD and unknown labels', () => {
   assert.ok(qualityRank('2160p HDR') > qualityRank('1080p'));
   assert.ok(qualityRank('1080p') > qualityRank('720p'));
