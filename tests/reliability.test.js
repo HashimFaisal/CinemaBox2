@@ -140,7 +140,7 @@ test('Internet Archive adapter returns a valid public-domain video and explains 
       })
     });
     throw new Error('Unexpected URL: ' + url);
-  }, { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
+  }, { error() {}, warn() {}, log(...args) { logs.push(args.join(' ')); } });
   const provider = api.createInternetArchiveProvider();
   const streams = await provider.getStreams({
     type: 'movie',
