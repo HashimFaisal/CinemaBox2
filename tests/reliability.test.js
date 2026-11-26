@@ -8,13 +8,13 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
 
-function loadInternals(fetchImpl) {
+function loadInternals(fetchImpl, logger) {
   const sandbox = {
     URL,
     module: { exports: {} },
     fetch: fetchImpl,
     TMDB_API_KEY: 'test-secret-key',
-    console: { log() {}, error() {} }
+    console: logger || { log() {}, error() {} }
   };
   vm.runInNewContext(
     source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, getPlayer };',
@@ -571,4 +571,89 @@ test('unknown provider quality is retained without guessing from the URL', () =>
   assert.equal(api.normalizeQuality('1080P'), '1080p');
   assert.equal(api.normalizeQuality('4K HDR'), '4K HDR');
   assert.equal(api.normalizeQuality(undefined), 'Video');
+});
+
+
+test('player network failures emit a stage-specific safe diagnostic', async () => {
+  const diagnostics = [];
+  const logger = {
+    log() {},
+    error(...args) { diagnostics.push(args); }
+  };
+  const api = loadInternals((url) => {
+    if (url.includes('/search?')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 990, title: 'Diagnostic Movie', type: 'MOVIE' }]
+        }))
+      });
+    }
+    if (url.includes('/shows/shows/dynamic/990')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          post_info: { episode_id: 9990 }
+        }))
+      });
+    }
+    if (url.includes('/shows/episodes/player/9990')) {
+      return Promise.reject(new Error('network unavailable for api_key=test-secret-key'));
+    }
+    throw new Error('Unexpected URL: ' + url);
+  }, logger);
+
+  const result = await api.fetchStreams('movie', 'tt9900001', {
+    name: 'Diagnostic Movie',
+    original_name: 'Diagnostic Movie',
+    year: ''
+  });
+  assert.deepEqual(Array.from(result.streams), []);
+  const diagnostic = diagnostics.find(entry => entry[0] === '[CINEMABOX DIAGNOSTIC]');
+  assert.ok(diagnostic, 'expected a structured diagnostic');
+  const payload = JSON.parse(diagnostic[1]);
+  assert.equal(payload.stage, 'player');
+  assert.equal(payload.code, 'NETWORK_ERROR');
+  assert.equal(payload.type, 'movie');
+  assert.equal(payload.id, 'tt9900001');
+  assert.match(payload.message, /\\[REDACTED\\]/);
+  assert.doesNotMatch(payload.message, /test-secret-key/);
+});
+
+test('malformed player payload is diagnosed separately from an empty player result', async () => {
+  const diagnostics = [];
+  const logger = { log() {}, error(...args) { diagnostics.push(args); } };
+  const api = loadInternals((url) => {
+    if (url.includes('/search?')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 991, title: 'Bad Player Payload', type: 'MOVIE' }]
+        }))
+      });
+    }
+    if (url.includes('/shows/shows/dynamic/991')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ post_info: { episode_id: 9991 } }))
+      });
+    }
+    if (url.includes('/shows/episodes/player/9991')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ videos: 'unexpected' }))
+      });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  }, logger);
+
+  const result = await api.fetchStreams('movie', 'tt9910001', {
+    name: 'Bad Player Payload',
+    original_name: 'Bad Player Payload',
+    year: ''
+  });
+  assert.deepEqual(Array.from(result.streams), []);
+  const diagnostic = diagnostics.find(entry => entry[0] === '[CINEMABOX DIAGNOSTIC]');
+  assert.ok(diagnostic);
+  assert.equal(JSON.parse(diagnostic[1]).code, 'PLAYER_PAYLOAD_INVALID');
 });
