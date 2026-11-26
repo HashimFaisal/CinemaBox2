@@ -68,6 +68,8 @@ var createProviderEngine = (function () {
       const state = health.get(provider.id);
       if (provider.enabled === false) return { providerId: provider.id, status: 'disabled', streams: [] };
       if (state.openUntil > now()) return { providerId: provider.id, status: 'circuit-open', streams: [] };
+      const providerStartedAt = now();
+      console.log('[ENGINE TRACE] provider-start', provider.id, 'at:', providerStartedAt);
       const providerTimeoutMs = Math.max(100, Number(provider.timeoutMs) || defaultTimeoutMs);
       const deadline = Math.min(Number.isFinite(context.deadline) ? context.deadline : Infinity, now() + providerTimeoutMs);
       if (deadline <= now()) return { providerId: provider.id, status: 'deadline-exceeded', streams: [] };
@@ -82,12 +84,14 @@ var createProviderEngine = (function () {
           providerId: provider.id, deadline: deadline
         })));
         const result = await Promise.race([work, timeout]);
+        console.log('[ENGINE TRACE] provider-settled', provider.id, 'elapsedMs:', now() - providerStartedAt, 'timedOut:', timedOut);
         cancel(timer);
         state.failures = 0;
         state.openUntil = 0;
         const raw = Array.isArray(result) ? result : (result && Array.isArray(result.streams) ? result.streams : []);
         return { providerId: provider.id, status: 'ok', streams: raw.map(item => normalizeStream(item, provider)).filter(Boolean) };
       } catch (error) {
+        console.error('[ENGINE TRACE] provider-error', provider.id, 'elapsedMs:', now() - providerStartedAt, 'timedOut:', timedOut, 'error:', String(error && error.message || error));
         cancel(timer);
         state.failures += 1;
         if (state.failures >= failureThreshold) state.openUntil = now() + cooldownMs;
@@ -96,6 +100,8 @@ var createProviderEngine = (function () {
     }
   
     async function getStreams(context) {
+      const engineStartedAt = now();
+      console.log('[ENGINE TRACE] engine-start', 'providers:', providers.length);
       const input = context || {};
       const results = new Array(providers.length);
       let cursor = 0;
@@ -498,6 +504,7 @@ function searchCinemaBox(title, type, year, deadline) {
     function fetchFirstPage(term) {
       var termItems = new Map();
       return fetchSearchPage(term, 1).then(function (data) {
+        console.log('[SEARCH TRACE] first-page-json-ready', 'term:', term, 'hasData:', Boolean(data), 'at:', Date.now());
         var before = foundItems.size;
         var count = data ? addResults(data, termItems) : 0;
         var best = rankItems(Array.from(termItems.values()));
@@ -673,6 +680,7 @@ function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadlin
 
     searches.forEach(function (search) {
       search.then(function (result) {
+        console.log('[SEARCH TRACE] query-settled', 'query:', result.title, 'hasItem:', Boolean(result.item), 'hasError:', Boolean(result.error), 'at:', Date.now());
         if (completed) return;
         settled++;
         if (result.item) {
@@ -867,6 +875,7 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
     : getExternalMeta(type, external.imdbId, deadline);
 
   return metaPromise.then(function (meta) {
+    console.log('[FETCH TRACE] metadata-ready', 'elapsedMs:', Date.now() - timingStart);
     if (!meta || (!meta.name && !meta.original_name)) {
       diagnostic('metadata', 'METADATA_INCOMPLETE', type, id);
       return null;
@@ -883,6 +892,7 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
     
     failureStage = 'search';
     ensureBudget(deadline, 'primary title search');
+    console.log('[FETCH TRACE] search-start', 'at:', Date.now());
     return searchCinemaBoxTitles(
       meta.name || meta.original_name,
       meta.original_name,
@@ -890,6 +900,7 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
       year,
       deadline
     ).then(function (found) {
+      console.log('[FETCH TRACE] search-finish', 'elapsedMs:', Date.now() - stageStart, 'found:', Boolean(found));
       console.log('[TIMING] search:', Date.now() - stageStart, 'ms');
       stageStart = Date.now();
       return found;
@@ -902,7 +913,9 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
     }
     failureStage = 'details';
     ensureBudget(deadline, 'show details');
+    console.log('[FETCH TRACE] details-start', 'at:', Date.now());
     return getDetails(found.id, null, deadline).then(function (details) {
+      console.log('[FETCH TRACE] details-finish', 'elapsedMs:', Date.now() - stageStart);
       console.log('[TIMING] details:', Date.now() - stageStart, 'ms');
       stageStart = Date.now();
       var post = details.post_info;
@@ -936,7 +949,9 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
 
     failureStage = 'player';
     ensureBudget(deadline, 'player lookup');
+    console.log('[FETCH TRACE] player-start', 'episode:', episodeId, 'at:', Date.now());
     return getPlayer(episodeId, deadline).then(function (player) {
+      console.log('[FETCH TRACE] player-finish', 'elapsedMs:', Date.now() - stageStart);
       console.log('[TIMING] player:', Date.now() - stageStart, 'ms');
       var streams = [];
       if (!player || !Array.isArray(player.videos)) {
@@ -1131,8 +1146,13 @@ var cinemaBoxProviderEngine = createProviderEngine({
     name: 'CinemaBox',
     priority: 100,
     getStreams: function (context) {
+      var adapterStartedAt = Date.now();
+      console.log('[ENGINE TRACE] adapter-start', 'at:', adapterStartedAt);
       return fetchStreams(context.type, context.id, context.meta, context.deadline, true)
-        .then(function (result) { return Array.isArray(result && result.streams) ? result.streams : []; });
+        .then(function (result) {
+          console.log('[ENGINE TRACE] adapter-finish', 'elapsedMs:', Date.now() - adapterStartedAt, 'streams:', Array.isArray(result && result.streams) ? result.streams.length : 0);
+          return Array.isArray(result && result.streams) ? result.streams : [];
+        });
     }
   }, Object.assign(createInternetArchiveProvider(), {
     priority: 50,
@@ -1217,6 +1237,7 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
         meta: meta,
         deadline: deadline
       }).then(function (result) {
+        console.log('[ENGINE TRACE] entry-engine-result', 'elapsedMs:', Date.now() - requestStart, 'at:', Date.now());
         var streams = result.streams.map(function (stream) {
           // Preserve the exact public stream shape expected by Nuvio.
           return {
