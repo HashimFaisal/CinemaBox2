@@ -49,13 +49,17 @@ function cached(key, loader, ttl) {
 function uniqueStreamVideos(videos) {
   var seen = new Set();
   return (Array.isArray(videos) ? videos : []).filter(function (video) {
-    if (!video || typeof video.url !== 'string' || !/^https?:\/\//i.test(video.url)) return false;
-    if (seen.has(video.url)) return false;
-    seen.add(video.url);
+    if (!video || typeof video.url !== 'string') return false;
+    var url = video.url;
+    // Reject incomplete or malformed HTTP URLs before handing them to the player.
+    if (url !== url.trim() || /\\s|\\\\/.test(url) ||
+        !/^https?:\\/\\/[^/?#\\s]+(?:[/?#]|$)/i.test(url)) return false;
+    // Keep the original URL untouched: signed query strings may be order-sensitive.
+    if (seen.has(url)) return false;
+    seen.add(url);
     return true;
   });
 }
-
 function request(url, deadline) {
   ensureBudget(deadline, 'HTTP request');
   return fetch(url, {
