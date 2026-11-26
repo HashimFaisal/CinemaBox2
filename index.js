@@ -1269,6 +1269,9 @@ function createInternetArchiveProvider(options) {
   async function discoverCandidates(variants, year, deadline) {
     const found = new Map();
     const querySummaries = [];
+    const rawSampleDocs = [];
+    let rawResultCount = 0;
+    let firstSearchShape = null;
     const escaped = variants.map(function (value) {
       return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     });
@@ -1279,6 +1282,21 @@ function createInternetArchiveProvider(options) {
       return getJson(url, deadline).then(function (search) {
         const responseObject = search && search.response && typeof search.response === 'object' ? search.response : null;
         const docs = responseObject && Array.isArray(responseObject.docs) ? responseObject.docs : [];
+        rawResultCount += docs.length;
+        if (rawSampleDocs.length < 5) rawSampleDocs.push.apply(rawSampleDocs, docs.slice(0, 5 - rawSampleDocs.length).map(function (doc) {
+          return { identifier: doc && doc.identifier ? String(doc.identifier) : null,
+            title: doc && doc.title ? String(doc.title) : null, year: doc && doc.year ? String(doc.year) : null };
+        }));
+        if (!firstSearchShape) firstSearchShape = {
+          topLevelKeys: search && typeof search === 'object' ? Object.keys(search).slice(0, 12) : [],
+          responseKeys: responseObject ? Object.keys(responseObject).slice(0, 16) : [],
+          docsFieldType: Array.isArray(responseObject && responseObject.docs) ? 'array' :
+            (responseObject && responseObject.docs == null ? 'missing-or-null' : typeof (responseObject && responseObject.docs)),
+          responseError: search && (search.error || search.errors || search.exception) ?
+            String(search.error || search.errors || search.exception).slice(0, 200) : null,
+          responseMessage: responseObject && (responseObject.message || responseObject.error) ?
+            String(responseObject.message || responseObject.error).slice(0, 200) : null
+        };
         querySummaries.push({
           queryIndex: index,
           queryTitle: variants[index],
@@ -1307,6 +1325,9 @@ function createInternetArchiveProvider(options) {
       });
     });
     await Promise.all(requests);
+    if (querySummaries.length && querySummaries.every(function (item) { return Boolean(item.requestError); })) {
+      throw new Error('All Internet Archive search queries failed');
+    }
 
     const filtered = { missingIdentifier: 0, titleMismatch: 0, yearMismatch: 0, lowTitleConfidence: 0 };
     const candidates = [];
@@ -1385,15 +1406,16 @@ function createInternetArchiveProvider(options) {
         continue;
       }
       const metadata = record && record.metadata || {};
-      if (!isPermittedLicense(metadata)) { rejected.licenseNotPermitted += 1; continue; }
+      if (!isPermittedLicense(metadata)) { rejected.licenseNotPermitted += 1; trace('candidate-rejected', { identifier: String(doc.identifier), reason: 'license-not-permitted' }); continue; }
       const metadataTitle = metadata.title || doc.title || '';
       const metadataScore = variants.reduce(function (best, variant) {
         return Math.max(best, titleSimilarity(variant, metadataTitle));
       }, 0);
-      if (metadataScore < 0.82) { rejected.metadataTitleMismatch += 1; continue; }
+      if (metadataScore < 0.82) { rejected.metadataTitleMismatch += 1; trace('candidate-rejected', { identifier: String(doc.identifier), reason: 'metadata-title-mismatch', titleScore: Number(metadataScore.toFixed(2)) }); continue; }
       const recordYear = yearOf(metadata.year || metadata.date || doc.year);
       if (year && recordYear && recordYear !== '1900' && year !== recordYear) {
         rejected.metadataYearMismatch += 1;
+        trace('candidate-rejected', { identifier: String(doc.identifier), reason: 'metadata-year-mismatch', expectedYear: year, actualYear: recordYear });
         continue;
       }
 
