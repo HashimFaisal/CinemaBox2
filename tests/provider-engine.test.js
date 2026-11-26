@@ -85,3 +85,26 @@ test('supports a provider-specific timeout shorter than the global budget', asyn
   const result = await engine.getStreams({});
   assert.equal(result.providers[0].status, 'timeout');
 });
+
+test('returns a fast provider result immediately and clears its timeout', async () => {
+  let timerCleared = false;
+  const engine = createProviderEngine({
+    providerTimeoutMs: 5000,
+    setTimeout: (callback, delay) => setTimeout(callback, delay),
+    clearTimeout: timer => {
+      timerCleared = true;
+      clearTimeout(timer);
+    },
+    providers: [{
+      id: 'fast',
+      getStreams: async () => [{ url: 'https://cdn.example/instant.mp4', quality: '1080p' }]
+    }]
+  });
+  const startedAt = Date.now();
+  const result = await engine.getStreams({});
+  const elapsedMs = Date.now() - startedAt;
+  assert.equal(result.providers[0].status, 'ok');
+  assert.equal(result.streams.length, 1);
+  assert.ok(elapsedMs < 1000, 'fast provider should not wait for its timeout');
+  assert.equal(timerCleared, true);
+});
