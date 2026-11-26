@@ -174,7 +174,7 @@ test('Internet Archive adapter reports title and year candidate filtering', asyn
       { identifier: 'wrong-year', title: 'Target Film', year: '1940' },
       { title: 'Target Film', year: '1931' }
     ] } })
-  }), { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
+  }), { error() {}, warn() {}, log(...args) { logs.push(args.join(' ')); } });
   const provider = api.createInternetArchiveProvider();
   const streams = await provider.getStreams({ type: 'movie', meta: { name: 'Target Film', year: '1931' } });
   assert.equal(streams.length, 0);
