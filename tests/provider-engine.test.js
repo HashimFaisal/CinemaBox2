@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createProviderEngine, normalizeStream, qualityRank, validHttpUrl } = require('../engine/provider-engine');
+const { createProviderEngine, normalizeStream, qualityRank, validHttpUrl, streamRejectionReason } = require('../engine/provider-engine');
 
 test('normalizes qualities and rejects unsafe URLs', () => {
   const provider = { id: 'primary', name: 'CinemaBox' };
@@ -11,6 +11,9 @@ test('normalizes qualities and rejects unsafe URLs', () => {
   assert.equal(validHttpUrl('https:///missing-host.mp4'), false);
   assert.equal(validHttpUrl('https://'), false);
   assert.equal(validHttpUrl('https://user:pass@cdn.example/video.mp4'), false);
+  assert.equal(streamRejectionReason(null), 'invalid-item');
+  assert.equal(streamRejectionReason({ url: '' }), 'missing-url');
+  assert.equal(streamRejectionReason({ url: 'broken' }), 'invalid-url');
   assert.equal(normalizeStream({ url: 'https://cdn.example/a.mp4', quality: '4K HDR' }, provider).quality, '2160p HDR');
 });
 
@@ -148,13 +151,17 @@ test('tracks provider latency, reliability, and valid stream yield', async () =>
   assert.deepEqual(second.streams.filter(stream => stream.quality === '1080p').map(stream => stream.providerId), ['steady', 'flaky']);
 });
 
-test('empty or invalid provider results do not count as productive successes', async () => {
+test('empty or invalid provider results expose rejection diagnostics', async () => {
   const engine = createProviderEngine({ providers: [
-    { id: 'empty', getStreams: async () => [{ url: 'not-a-url', quality: '1080p' }] }
+    { id: 'empty', getStreams: async () => [{ url: 'not-a-url', quality: '1080p' }, { url: '', quality: '720p' }, null] }
   ] });
   const result = await engine.getStreams({});
+  const provider = result.providers[0];
   const health = engine.getHealth().empty;
-  assert.equal(result.providers[0].status, 'ok');
+  assert.equal(provider.status, 'empty');
+  assert.equal(provider.rawStreams, 3);
+  assert.equal(provider.rejectedStreams, 3);
+  assert.deepEqual(provider.rejectionReasons, { 'invalid-url': 1, 'missing-url': 1, 'invalid-item': 1 });
   assert.equal(result.streams.length, 0);
   assert.equal(health.attempts, 1);
   assert.equal(health.successes, 0);
