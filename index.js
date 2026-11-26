@@ -19,7 +19,24 @@ const SEARCH_CACHE_TTL_MS = 600000;
 const METADATA_CACHE_TTL_MS = 600000;
 const PROVIDER_BUDGET_MS = 45000;
 const REQUEST_TIMEOUT_MS = 12000;
+const MIN_REQUEST_HEADROOM_MS = 750;
 const SEARCH_MAX_PAGES = 5;
+
+function hasRequestHeadroom(deadline, reserveMs, stage) {
+  if (!deadline) return true;
+  var remaining = deadline - Date.now();
+  var required = Number.isFinite(reserveMs) && reserveMs > 0
+    ? reserveMs : MIN_REQUEST_HEADROOM_MS;
+  if (remaining >= required) return true;
+
+  console.log('[REQUEST SKIP]', JSON.stringify({
+    stage: String(stage || 'request'),
+    reason: 'insufficient-provider-budget',
+    remainingMs: Math.max(0, remaining),
+    requiredMs: required
+  }));
+  return false;
+}
 
 function ensureBudget(deadline, stage) {
   if (deadline && Date.now() >= deadline) {
@@ -292,6 +309,9 @@ function requestWithRetry(url, deadline, maxRetries) {
       if (!retryable || index >= retries) throw error;
 
       var delay = 200 * (index + 1);
+      if (!hasRequestHeadroom(deadline, delay + MIN_REQUEST_HEADROOM_MS, 'http_retry')) {
+        throw error;
+      }
       console.log('[HTTP RETRY]', 'attempt:', index + 2,
         'maxAttempts:', retries + 1, 'delayMs:', delay,
         'reason:', /HTTP \d+/.test(message) ? message.match(/HTTP \d+/)[0] : 'network');
@@ -472,6 +492,10 @@ function searchCinemaBox(title, type, year, deadline) {
 
     function fetchMorePages(term, pageNum) {
       if (pageNum > SEARCH_MAX_PAGES) return Promise.resolve();
+      if (!hasRequestHeadroom(deadline, MIN_REQUEST_HEADROOM_MS, 'search_pagination')) {
+        failedPageCount++;
+        return Promise.resolve();
+      }
 
       // Fetch two adjacent pages together to avoid serial network round trips.
       // Keep the same five-page ceiling and the same strong-match stop rule.
