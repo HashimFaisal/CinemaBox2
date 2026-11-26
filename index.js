@@ -628,85 +628,57 @@ function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadlin
     titles.push(alternate);
   }
 
-  // Search localized and original titles concurrently. Once one valid result
-  // arrives, allow a short arbitration window for a more accurate candidate.
-  var searches = titles.map(function (title, index) {
-    console.log('[SEARCH PARALLEL]', 'query:', title, 'index:', index);
-    return searchCinemaBox(title, type, year, deadline).then(function (item) {
-      return { title: title, index: index, item: item, error: null };
-    }).catch(function (error) {
-      return { title: title, index: index, item: null, error: error };
-    });
-  });
+  // Race title variants and return the first independently validated strong match.
+  // Nuvio's scraper contract resolves one array, so avoid timer-based arbitration:
+  // an embedded runtime may delay timer callbacks and hold back already-ready streams.
+  var completed = false;
+  var settled = 0;
+  var firstError = null;
+
+  function finish(item, title, reason) {
+    if (completed) return;
+    completed = true;
+    var confidence = Math.max(titleScore(primaryTitle, item.title),
+      alternate ? titleScore(alternate, item.title) : 0);
+    var itemYear = releaseYear(item.year);
+    if (year && itemYear && itemYear !== '1900') {
+      confidence += itemYear === String(year) ? 0.1 : -0.1;
+    }
+    console.log('[SEARCH PARALLEL MATCH]', 'query:', title,
+      'title:', item.title, 'strategy:', reason,
+      'confidence:', confidence.toFixed(2),
+      'completedQueries:', settled, 'totalQueries:', titles.length);
+    return item;
+  }
 
   return new Promise(function (resolve, reject) {
-    var settled = 0;
-    var candidates = [];
-    var firstError = null;
-    var completed = false;
-    var arbitrationTimer = null;
-    var arbitrationDelayMs = 120;
-
-    function candidateScore(result) {
-      var item = result.item;
-      var primaryScore = titleScore(primaryTitle, item.title);
-      var alternateScore = alternate ? titleScore(alternate, item.title) : 0;
-      var score = Math.max(primaryScore, alternateScore);
-      var itemYear = releaseYear(item.year);
-      if (year && itemYear && itemYear !== '1900') {
-        score += itemYear === String(year) ? 0.1 : -0.1;
-      }
-      return score;
-    }
-
-    function finishWithBest(reason) {
-      if (completed || !candidates.length) return;
-      completed = true;
-      if (arbitrationTimer) clearTimeout(arbitrationTimer);
-      candidates.sort(function (a, b) {
-        var scoreDifference = candidateScore(b) - candidateScore(a);
-        if (Math.abs(scoreDifference) > 0.000001) return scoreDifference;
-        // Prefer the primary/localized title when confidence is equivalent.
-        return a.index - b.index;
-      });
-      var best = candidates[0];
-      console.log('[SEARCH PARALLEL MATCH]', 'query:', best.title,
-        'title:', best.item.title, 'strategy:', reason,
-        'confidence:', candidateScore(best).toFixed(2),
-        'completedQueries:', settled, 'totalQueries:', searches.length);
-      resolve(best.item);
-    }
-
-    function finishWithoutMatch() {
-      if (completed || settled !== searches.length || candidates.length) return;
-      completed = true;
-      if (firstError) reject(firstError);
-      else resolve(null);
-    }
-
-    searches.forEach(function (search) {
-      search.then(function (result) {
-        console.log('[SEARCH TRACE] query-settled', 'query:', result.title, 'hasItem:', Boolean(result.item), 'hasError:', Boolean(result.error), 'at:', Date.now());
-        if (completed) return;
+    titles.forEach(function (title, index) {
+      console.log('[SEARCH PARALLEL]', 'query:', title, 'index:', index);
+      searchCinemaBox(title, type, year, deadline).then(function (item) {
         settled++;
-        if (result.item) {
-          candidates.push(result);
-          if (searches.length === 1) {
-            finishWithBest('single-query');
-          } else if (settled === searches.length) {
-            finishWithBest('all-queries-settled');
-          } else if (!arbitrationTimer) {
-            arbitrationTimer = setTimeout(function () {
-              finishWithBest('confidence-window');
-            }, arbitrationDelayMs);
-          }
+        console.log('[SEARCH TRACE] query-settled', 'query:', title,
+          'hasItem:', Boolean(item), 'hasError:', false, 'at:', Date.now());
+        if (completed) return;
+        if (item) {
+          // searchCinemaBox only returns items meeting its strong-match threshold.
+          resolve(finish(item, title, 'first-strong-match'));
           return;
         }
-        if (result.error && !firstError) firstError = result.error;
-        if (candidates.length && settled === searches.length) {
-          finishWithBest('all-queries-settled');
-        } else {
-          finishWithoutMatch();
+        if (settled === titles.length) {
+          completed = true;
+          if (firstError) reject(firstError);
+          else resolve(null);
+        }
+      }).catch(function (error) {
+        settled++;
+        console.log('[SEARCH TRACE] query-settled', 'query:', title,
+          'hasItem:', false, 'hasError:', true, 'at:', Date.now());
+        if (completed) return;
+        if (!firstError) firstError = error;
+        if (settled === titles.length) {
+          completed = true;
+          if (firstError) reject(firstError);
+          else resolve(null);
         }
       });
     });
