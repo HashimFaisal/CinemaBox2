@@ -1,22 +1,31 @@
 {
   "id": "cinemabox",
-  "name": "Cinema Box",
-  "version": "1.1.2",
+  "name": "CinemaBox",
+  "version": "2.1.5",
   "description": "Cinema Box direct movie and TV episode streams with Turbo Speed.",
   "author": "Community",
   "logo": "https://cinema.albox.co/favicon.ico",
-  "contentLanguage": ["ar", "en"],
+  "contentLanguage": [
+    "ar",
+    "en"
+  ],
   "scrapers": [
     {
       "id": "cinemabox",
-      "name": "Cinema Box",
+      "name": "CinemaBox",
       "description": "Cinema Box movie and series sources",
-      "version": "1.1.2",
+      "version": "2.1.5",
       "filename": "index.js",
-      "supportedTypes": ["movie", "tv"],
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "enabled": true,
       "hasSettings": false,
-      "supportedPlatforms": ["android", "ios"]
+      "supportedPlatforms": [
+        "android",
+        "ios"
+      ]
     }
   ]
 }

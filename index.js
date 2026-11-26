@@ -115,62 +115,175 @@ function getExternalMeta(type, id) {
 
 function searchCinemaBox(title, type, year) {
   return cached('search-' + type + '-' + normalizeTitle(title) + '-' + (year || ''), function () {
-    var queries = [title];
-    if (year) queries.push(title + ' ' + year);
     var foundItems = new Map();
 
-    function fetchAllQueries(qIndex) {
-      if (qIndex >= queries.length) return Promise.resolve(foundItems);
-      var term = queries[qIndex];
-
-      function fetchPage(pageNum) {
-        if (pageNum > 5) return Promise.resolve();
-        
-        // استبدلنا URLSearchParams بنص عادي لتجنب مشاكل Hermes
-        var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
-        
-        return api('search?' + queryStr).then(function (data) {
-          var results = (data.results || []).filter(function (item) {
-            return normalizeType(item.type) === type;
-          });
-          results.forEach(function (item) {
-            if (item.id) foundItems.set(String(item.id), item);
-          });
-          if ((data.results || []).length < 25) return Promise.resolve();
-          return fetchPage(pageNum + 1);
-        }).catch(function (error) {
-          console.warn('[SEARCH PAGE ERROR]', term, 'page', pageNum, error && error.message ? error.message : error);
-          return Promise.resolve();
-        });
-      }
-
-      return fetchPage(1).then(function () {
-        return fetchAllQueries(qIndex + 1);
-      });
-    }
-
-    return fetchAllQueries(0).then(function (items) {
+    function rankItems(items) {
       var queryTitle = normalizeTitle(title);
       var ranked = [];
       items.forEach(function (item) {
         var candidateTitle = normalizeTitle(item.title);
-        var score = titleScore(title, item.title);
+        var rawTitleScore = titleScore(title, item.title);
+        var score = rawTitleScore;
         var resultYear = releaseYear(item.year);
 
         if (queryTitle !== candidateTitle && queryTitle.split(' ').length === 1 && candidateTitle.split(' ').length > 1) {
           score = 0;
         }
-        
+
         if (year && resultYear && resultYear !== '1900') {
           if (year === resultYear) score += 0.1;
           else score -= 0.1;
         }
-        ranked.push({ item: item, score: score });
+        ranked.push({ item: item, score: score, titleScore: rawTitleScore, resultYear: resultYear });
       });
-      ranked.sort(function (a, b) { return b.score - a.score; });
+      ranked.sort(function (a, b) {
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.titleScore !== a.titleScore) return b.titleScore - a.titleScore;
+        var aYearMatch = year && a.resultYear === year ? 1 : 0;
+        var bYearMatch = year && b.resultYear === year ? 1 : 0;
+        if (bYearMatch !== aYearMatch) return bYearMatch - aYearMatch;
+        return String(a.item.id).localeCompare(String(b.item.id));
+      });
+      return ranked[0] || null;
+    }
 
-      var best = ranked[0];
-      if (best && best.score >= 0.50) {
+    var pageRequests = new Map();
+
+    function fetchSearchPage(term, pageNum) {
+      var requestKey = String(term) + '::' + pageNum;
+      if (pageRequests.has(requestKey)) return pageRequests.get(requestKey);
+      var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
+      function attempt(retry) {
+        return api('search?' + queryStr).catch(function (error) {
+          if (retry < 1) {
+            console.log('[SEARCH PAGE RETRY]', 'term:', term, 'page:', pageNum);
+            return attempt(retry + 1);
+          }
+          console.log('[SEARCH PAGE ERROR]', term, 'page', pageNum,
+            error && error.message ? error.message : error);
+          return null;
+        });
+      }
+      var pending = attempt(0);
+      pageRequests.set(requestKey, pending);
+      return pending;
+    }
+
+    function addResults(data, termItems) {
+      var pageResults = Array.isArray(data && data.results) ? data.results : [];
+      pageResults.filter(function (item) {
+        return normalizeType(item.type) === type;
+      }).forEach(function (item) {
+        if (item.id) {
+          foundItems.set(String(item.id), item);
+          if (termItems) termItems.set(String(item.id), item);
+        }
+      });
+      return pageResults.length;
+    }
+
+    // ابدأ ببحث الاسم فقط؛ استخدم الاسم مع السنة كاحتياط عند غياب التطابق القوي.
+    function fetchFirstPage(term) {
+      var termItems = new Map();
+      return fetchSearchPage(term, 1).then(function (data) {
+        var before = foundItems.size;
+        var count = data ? addResults(data, termItems) : 0;
+        var best = rankItems(Array.from(termItems.values()));
+        console.log('[SEARCH PAGE]', 'term:', term, 'page:', 1, 'returned:', count,
+          'newUnique:', foundItems.size - before,
+          'best:', best ? best.item.title : 'none',
+          'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
+          'score:', best ? best.score.toFixed(2) : 'n/a',
+          'year:', best ? (best.resultYear || 'unknown') : 'n/a');
+        return { count: count, best: best };
+      });
+    }
+
+    function fetchMorePages(term, pageNum) {
+      if (pageNum > 5) return Promise.resolve();
+
+      // Fetch two adjacent pages together to avoid serial network round trips.
+      // Keep the same five-page ceiling and the same strong-match stop rule.
+      var pageNumbers = [pageNum, pageNum + 1].filter(function (number) {
+        return number <= 5;
+      });
+
+      return Promise.all(pageNumbers.map(function (number) {
+        return fetchSearchPage(term, number);
+      })).then(function (pages) {
+        // Merge in page order so equal-score tie-breaking remains deterministic.
+        var counts = pages.map(function (data, index) {
+          var before = foundItems.size;
+          var count = data ? addResults(data) : 0;
+          var bestOnPage = rankItems(Array.from(foundItems.values()));
+          console.log('[SEARCH PAGE]', 'term:', term, 'page:', pageNumbers[index],
+            'returned:', count, 'newUnique:', foundItems.size - before,
+            'best:', bestOnPage ? bestOnPage.item.title : 'none',
+            'titleScore:', bestOnPage ? bestOnPage.titleScore.toFixed(2) : 'n/a',
+            'score:', bestOnPage ? bestOnPage.score.toFixed(2) : 'n/a',
+            'year:', bestOnPage ? (bestOnPage.resultYear || 'unknown') : 'n/a');
+          return count;
+        });
+        var best = rankItems(Array.from(foundItems.values()));
+        if (best && best.score >= 0.95) {
+          console.log('[SEARCH STOP]', 'reason: strong-score', 'score:', best.score.toFixed(2));
+          return;
+        }
+        var hadPageFailure = pages.some(function (data) { return data === null; });
+        if (!hadPageFailure && counts.some(function (count) { return count < 25; })) {
+          console.log('[SEARCH STOP]', 'reason: last-page', 'returned:', counts);
+          return;
+        }
+        if (hadPageFailure) {
+          console.log('[SEARCH PAGINATION]', 'reason: continue-after-page-error', 'pages:', pageNumbers);
+        }
+        return fetchMorePages(term, pageNum + pageNumbers.length);
+      });
+    }
+
+    return fetchFirstPage(title).then(function (firstPage) {
+      var firstCount = firstPage.count;
+      var firstBest = firstPage.best;
+      var best = rankItems(Array.from(foundItems.values()));
+      if (best && best.score >= 0.95) {
+        console.log('[SEARCH STOP]', 'reason: first-page-strong-match', 'title:', best.item.title,
+          'titleScore:', best.titleScore.toFixed(2), 'score:', best.score.toFixed(2));
+        return;
+      }
+
+      console.log('[SEARCH FALLBACK]', 'reason:', best ? 'best-score-below-0.95' : 'no-results',
+        'query:', title, 'year:', year || 'none',
+        'best:', best ? best.item.title : 'none',
+        'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
+        'score:', best ? best.score.toFixed(2) : 'n/a');
+      var fallbackTerm = year ? title + ' ' + year : null;
+      var fallbackSearch = fallbackTerm ? fetchFirstPage(fallbackTerm) : Promise.resolve({ count: 0, best: null });
+
+      return fallbackSearch.then(function (fallbackPage) {
+        var fallbackCount = fallbackPage.count;
+        best = rankItems(Array.from(foundItems.values()));
+        if (best && best.score >= 0.95) {
+          console.log('[SEARCH STOP]', 'reason: fallback-strong-match', 'title:', best.item.title,
+            'titleScore:', best.titleScore.toFixed(2), 'score:', best.score.toFixed(2));
+          return;
+        }
+
+        console.log('[SEARCH PAGINATION]', 'reason: no-strong-match-after-first-pages',
+          'best:', best ? best.item.title : 'none',
+          'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
+          'score:', best ? best.score.toFixed(2) : 'n/a');
+        // Paginate only the first-page query that produced the better candidate.
+        // This avoids expanding both the plain-title and year-fallback searches.
+        var useFallback = fallbackTerm && fallbackCount >= 25 && fallbackPage.best &&
+          (!firstBest || fallbackPage.best.score > firstBest.score);
+        var paginationTerm = useFallback ? fallbackTerm : title;
+        var paginationCount = useFallback ? fallbackCount : firstCount;
+        if (paginationCount >= 25) return fetchMorePages(paginationTerm, 2);
+        return Promise.resolve();
+      });
+    }).then(function () {
+      var best = rankItems(Array.from(foundItems.values()));
+      if (best && best.titleScore >= 0.75 && best.score >= 0.75) {
         console.log('[MATCH]', title, '=>', best.item.title, 'ID:', best.item.id, 'score:', best.score.toFixed(2));
         return best.item;
       }
@@ -179,7 +292,6 @@ function searchCinemaBox(title, type, year) {
     });
   }, 600000);
 }
-
 function parseExternalId(id) {
   var match = String(id).match(/^(tt\d+)(?::(\d+):(\d+))?$/);
   if (!match) return null;
@@ -282,8 +394,11 @@ function resolveImdbId(id, mediaType) {
       });
   });
 }
-function fetchStreams(type, id) {
+function fetchStreams(type, id, suppliedMeta) {
+  var timingStart = Date.now();
+  var stageStart = timingStart;
   var episodeId = null;
+  var displayTitle = '';
   var external = parseExternalId(id);
 
   if (!external) {
@@ -291,10 +406,24 @@ function fetchStreams(type, id) {
     return Promise.resolve({ streams: [] });
   }
 
-  return getExternalMeta(type, external.imdbId).then(function (meta) {
+  var metaPromise = suppliedMeta
+    ? Promise.resolve(suppliedMeta)
+    : getExternalMeta(type, external.imdbId);
+
+  return metaPromise.then(function (meta) {
+    displayTitle = String(meta.name || meta.original_name || external.imdbId);
+    if (type === 'series' && external.season && external.episode) {
+      var seasonLabel = String(external.season).padStart(2, '0');
+      var episodeLabel = String(external.episode).padStart(2, '0');
+      displayTitle += ' S' + seasonLabel + 'E' + episodeLabel;
+    }
+    console.log('[TIMING] metadata:', Date.now() - stageStart, 'ms');
+    stageStart = Date.now();
     var year = releaseYear(meta.year);
     
     return searchCinemaBox(meta.name, type, year).then(function (found) {
+      console.log('[TIMING] search:', Date.now() - stageStart, 'ms');
+      stageStart = Date.now();
       if (found) return found;
       if (meta.original_name && meta.original_name !== meta.name) {
         console.log('[RETRY WITH ARABIC]', meta.original_name);
@@ -306,6 +435,8 @@ function fetchStreams(type, id) {
   .then(function (found) {
     if (!found) return null;
     return getDetails(found.id).then(function (details) {
+      console.log('[TIMING] details:', Date.now() - stageStart, 'ms');
+      stageStart = Date.now();
       var post = details.post_info;
       if (!post) return null;
 
@@ -326,19 +457,34 @@ function fetchStreams(type, id) {
     }
 
     return getPlayer(episodeId).then(function (player) {
+      console.log('[TIMING] player:', Date.now() - stageStart, 'ms');
       var streams = [];
-      (player.videos || []).forEach(function (video) {
-        if (video.url && /^https?:\/\//i.test(video.url)) {
+      var playerVideos = Array.isArray(player && player.videos) ? player.videos : [];
+      console.log('[PLAYER DIAGNOSTICS]', type, id,
+        'playerKeys:', Object.keys(player || {}),
+        'videosType:', Array.isArray(player && player.videos) ? 'array' : typeof (player && player.videos),
+        'videosCount:', playerVideos.length);
+      playerVideos.forEach(function (video, index) {
+        var videoUrl = video && video.url;
+        var validUrl = typeof videoUrl === 'string' && /^https?:\/\//i.test(videoUrl);
+        console.log('[PLAYER VIDEO]', 'index:', index,
+          'keys:', Object.keys(video || {}),
+          'urlType:', typeof videoUrl,
+          'validHttpUrl:', validUrl,
+          'quality:', video && video.quality ? video.quality : 'unknown');
+      });
+      playerVideos.forEach(function (video) {
+        if (video && typeof video.url === 'string' && /^https?:\/\//i.test(video.url)) {
           var quality = video.quality || 'Video';
+          var streamLabel = 'CinemaBox (' + displayTitle + ') ' + quality;
           streams.push({
-            name: 'Cinema Box · ' + quality,
-            title: quality + ' • Cinema Box',
-            url: video.url,
-            quality: quality
+            name: streamLabel,
+            title: streamLabel,
+            url: video.url
           });
         }
       });
-      console.log('[STREAMS]', type, id, 'episode:', episodeId, 'count:', streams.length);
+      console.log('[STREAMS]', type, id, 'episode:', episodeId, 'count:', streams.length, 'total:', Date.now() - timingStart, 'ms');
       return { streams: streams };
     });
   })
@@ -348,7 +494,34 @@ function fetchStreams(type, id) {
   });
 }
 
+function getTmdbMetadata(tmdbId, mediaType) {
+  var kind = (String(mediaType).toLowerCase() === 'tv' || String(mediaType).toLowerCase() === 'series') ? 'tv' : 'movie';
+  var key = typeof TMDB_API_KEY !== 'undefined' ? TMDB_API_KEY : '';
+  if (!key) return Promise.reject(new Error('TMDB API key is unavailable'));
+
+  var url = 'https://api.themoviedb.org/3/' + kind + '/' +
+    encodeURIComponent(String(tmdbId)) + '?api_key=' + encodeURIComponent(key) +
+    '&append_to_response=external_ids';
+
+  return cached('tmdb-meta-' + kind + '-' + tmdbId, function () {
+    return request(url).then(function (data) {
+      var imdbId = data.imdb_id || (data.external_ids && data.external_ids.imdb_id);
+      var name = data.title || data.name;
+      if (!imdbId || !name) throw new Error('TMDB metadata is incomplete for ' + tmdbId);
+
+      return {
+        imdbId: imdbId,
+        meta: {
+          name: name,
+          original_name: data.original_title || data.original_name || name,
+          year: data.release_date || data.first_air_date || ''
+        }
+      };
+    });
+  }, 600000);
+}
 function getStreamsForNuvio(input, mediaType, season, episode) {
+  var requestStart = Date.now();
   return Promise.resolve().then(function () {
     var args = input && typeof input === 'object'
       ? input
@@ -356,19 +529,48 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
 
     var rawType = String(args.mediaType || 'movie').toLowerCase();
     var oldType = rawType === 'tv' ? 'series' : rawType;
+    var rawId = String(args.tmdbId || '').replace(/^imdb:/i, '');
 
-    return resolveImdbId(args.tmdbId, rawType).then(function (imdbId) {
+    // لا تنفذ أي طلب metadata لمسلسل قبل تحديد حلقة صالحة.
+    // Nuvio قد يرسل -1:-1 عند فتح صفحة المسلسل دون اختيار حلقة.
+    if (oldType === 'series') {
+      var requestedSeason = Number(args.season);
+      var requestedEpisode = Number(args.episode);
+      if (!Number.isInteger(requestedSeason) || requestedSeason < 1 ||
+          !Number.isInteger(requestedEpisode) || requestedEpisode < 1) {
+        console.log('[SKIP STREAMS]', 'reason: episode-not-selected',
+          'season:', args.season, 'episode:', args.episode);
+        return [];
+      }
+    }
+
+    function run(imdbId, meta) {
       if (!imdbId) return [];
-
       var id = imdbId;
       if (oldType === 'series') {
         if (args.season == null || args.episode == null) return [];
         id += ':' + Number(args.season) + ':' + Number(args.episode);
       }
-
-      return fetchStreams(oldType, id).then(function (result) {
-        return Array.isArray(result && result.streams) ? result.streams : [];
+      return fetchStreams(oldType, id, meta).then(function (result) {
+        var streams = Array.isArray(result && result.streams) ? result.streams : [];
+        console.log('[TIMING] getStreams total:', Date.now() - requestStart, 'ms');
+        return streams;
       });
+    }
+
+    if (/^tt\d+$/i.test(rawId)) {
+      return getExternalMeta(oldType, rawId).then(function (meta) {
+        return run(rawId, meta);
+      });
+    }
+
+    var tmdbStart = Date.now();
+    return getTmdbMetadata(rawId, rawType).then(function (resolved) {
+      console.log('[TIMING] TMDB metadata:', Date.now() - tmdbStart, 'ms');
+      return run(resolved.imdbId, resolved.meta);
+    }).catch(function (error) {
+      console.error('[TMDB METADATA]', rawId, error.message);
+      return [];
     });
   }).catch(function (error) {
     console.error('[CINEMA BOX NUVIO]', error);
