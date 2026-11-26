@@ -18,6 +18,7 @@ const PLAYER_CACHE_TTL_MS = 30000;
 const SEARCH_CACHE_TTL_MS = 600000;
 const METADATA_CACHE_TTL_MS = 600000;
 const PROVIDER_BUDGET_MS = 45000;
+const REQUEST_TIMEOUT_MS = 12000;
 const SEARCH_MAX_PAGES = 5;
 
 function ensureBudget(deadline, stage) {
@@ -139,11 +140,20 @@ function diagnostic(stage, code, type, id, error) {
   console.error('[CINEMABOX DIAGNOSTIC]', JSON.stringify(detail));
 }
 
-function request(url, deadline) {
+function request(url, deadline, timeoutOverride) {
   ensureBudget(deadline, 'HTTP request');
   var requestStart = Date.now();
   var timingLogged = false;
   var requestLabel = 'unknown';
+  var controller = null;
+  var timeoutId = null;
+  var timeoutMs = Number.isFinite(timeoutOverride) && timeoutOverride > 0
+    ? Math.floor(timeoutOverride) : REQUEST_TIMEOUT_MS;
+
+  if (deadline) {
+    timeoutMs = Math.min(timeoutMs, Math.max(1, deadline - Date.now()));
+  }
+
   try {
     var parsedUrl = new URL(url);
     requestLabel = parsedUrl.hostname + parsedUrl.pathname;
@@ -151,7 +161,13 @@ function request(url, deadline) {
     requestLabel = 'invalid-url';
   }
 
-  return fetch(url, {
+  // Abort the underlying request when supported; the Promise race still
+  // enforces a hard bound on runtimes without AbortController.
+  if (typeof AbortController !== 'undefined') {
+    try { controller = new AbortController(); } catch (error) { controller = null; }
+  }
+
+  var options = {
     headers: {
       Accept: 'application/json',
       'User-Agent': 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36',
@@ -159,8 +175,12 @@ function request(url, deadline) {
       'Origin': 'https://cinema.albox.co',
       'Accept-Language': 'en-US,en;q=0.9'
     }
-  })
-  .then(function (response) {
+  };
+  if (controller) options.signal = controller.signal;
+
+  var networkPromise = Promise.resolve().then(function () {
+    return fetch(url, options);
+  }).then(function (response) {
     return response.text().then(function (body) {
       timingLogged = true;
       console.log('[HTTP TIMING]', requestLabel, 'status:', response.status,
@@ -174,8 +194,22 @@ function request(url, deadline) {
         throw new Error('Invalid JSON from ' + redactSensitive(url) + ': ' + redactSensitive(body.slice(0, 300)));
       }
     });
-  })
-  .catch(function (error) {
+  });
+
+  var timeoutPromise = new Promise(function (resolve, reject) {
+    timeoutId = setTimeout(function () {
+      if (controller) {
+        try { controller.abort(); } catch (error) {}
+      }
+      reject(new Error('CinemaBox request timeout after ' + timeoutMs + 'ms'));
+    }, timeoutMs);
+  });
+
+  return Promise.race([networkPromise, timeoutPromise]).then(function (result) {
+    if (timeoutId) clearTimeout(timeoutId);
+    return result;
+  }).catch(function (error) {
+    if (timeoutId) clearTimeout(timeoutId);
     if (!timingLogged) {
       console.log('[HTTP TIMING]', requestLabel, 'status: failed',
         'ms:', Date.now() - requestStart);
