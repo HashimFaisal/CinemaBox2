@@ -1236,7 +1236,17 @@ function createInternetArchiveProvider(options) {
     });
     const selectedCandidates = candidates.slice(0, maxResults);
     trace('search-complete', {
+      query: query,
+      reportedTotal: search && search.response && Number.isFinite(Number(search.response.numFound))
+        ? Number(search.response.numFound) : null,
       rawResults: docs.length,
+      sampleDocs: docs.slice(0, 5).map(function (doc) {
+        return {
+          identifier: doc && doc.identifier ? String(doc.identifier) : null,
+          title: doc && doc.title ? String(doc.title) : null,
+          year: doc && doc.year ? String(doc.year) : null
+        };
+      }),
       candidates: selectedCandidates.length,
       filtered: filtered
     });
