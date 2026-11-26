@@ -50,8 +50,8 @@ function createProviderEngine(options) {
   const failureThreshold = Math.max(1, Math.floor(config.failureThreshold || 2));
   const cooldownMs = Math.max(100, config.cooldownMs || 30000);
   const now = config.now || Date.now;
-  const schedule = config.setTimeout || setTimeout;
-  const cancel = config.clearTimeout || clearTimeout;
+  const schedule = config.setTimeout || (typeof setTimeout === 'function' ? setTimeout : function () { return null; });
+  const cancel = config.clearTimeout || (typeof clearTimeout === 'function' ? clearTimeout : function () {});
   const health = new Map();
 
   providers.forEach(provider => {
