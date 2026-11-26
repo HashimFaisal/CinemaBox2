@@ -105,3 +105,27 @@ test('stream URL deduplication preserves first occurrence and rejects invalid UR
 
   assert.equal(urls, 'https://cdn.example/1080p.m3u8|https://cdn.example/720p.m3u8');
 });
+
+
+test('a late rejected cache request cannot evict a newer value for the same key', async () => {
+  const api = loadInternals(() => {});
+  let rejectFirst;
+  const first = api.cached('shared-key', () => new Promise((resolve, reject) => {
+    rejectFirst = reject;
+  }), 0);
+
+  await Promise.resolve();
+  const second = api.cached('shared-key', () => 'newer-value', 600000);
+  assert.equal(await second, 'newer-value');
+
+  rejectFirst(new Error('late failure from old request'));
+  await assert.rejects(first);
+
+  let thirdLoaderCalls = 0;
+  const third = await api.cached('shared-key', () => {
+    thirdLoaderCalls++;
+    return 'unexpected';
+  }, 600000);
+  assert.equal(third, 'newer-value');
+  assert.equal(thirdLoaderCalls, 0);
+});
