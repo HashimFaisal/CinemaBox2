@@ -845,8 +845,8 @@ test('HTTP request deadline is shared with the caller and expired deadlines do n
     });
   });
 
-  await assert.rejects(
-    api.request('https://example.test/resource', Date.now() - 1),
+  assert.throws(
+    () => api.request('https://example.test/resource', Date.now() - 1),
     /time budget exceeded/
   );
   assert.equal(calls, 0);
