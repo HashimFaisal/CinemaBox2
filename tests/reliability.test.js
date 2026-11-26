@@ -616,7 +616,7 @@ test('player network failures emit a stage-specific safe diagnostic', async () =
   assert.equal(payload.code, 'NETWORK_ERROR');
   assert.equal(payload.type, 'movie');
   assert.equal(payload.id, 'tt9900001');
-  assert.match(payload.message, /\\[REDACTED\\]/);
+  assert.ok(payload.message.includes('[REDACTED]'));
   assert.doesNotMatch(payload.message, /test-secret-key/);
 });
 
