@@ -958,6 +958,47 @@ test('localized title lookup returns the first valid match without waiting for a
 });
 
 
+test('exact primary title and year match skips the alternate-title arbitration delay', async () => {
+  let releaseAlternate;
+  let alternateStarted = false;
+  const alternateGate = new Promise(resolve => { releaseAlternate = resolve; });
+  const api = loadInternals(url => {
+    const term = new URL(url).searchParams.get('term');
+    if (term === 'Exact Primary') {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 880, title: 'Exact Primary', type: 'MOVIE', year: '2022' }]
+        }))
+      });
+    }
+    if (term === 'Alternate Name') {
+      alternateStarted = true;
+      return alternateGate;
+    }
+    throw new Error('Unexpected URL: ' + url);
+  });
+
+  const pending = api.searchCinemaBoxTitles(
+    'Exact Primary',
+    'Alternate Name',
+    'movie',
+    '2022',
+    Date.now() + 10000
+  );
+  const result = await Promise.race([
+    pending,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('exact match waited for arbitration')), 80))
+  ]);
+
+  assert.equal(result.id, 880);
+  assert.equal(alternateStarted, true, 'alternate lookup should still start concurrently');
+  releaseAlternate({
+    ok: true,
+    text: () => Promise.resolve(JSON.stringify({ results: [] }))
+  });
+});
+
 test('parallel title lookup prefers a stronger candidate within the confidence window', async () => {
   const api = loadInternals(url => {
     const term = new URL(url).searchParams.get('term');
