@@ -135,7 +135,9 @@ function diagnostic(stage, code, type, id, error) {
 
 function request(url, deadline) {
   ensureBudget(deadline, 'HTTP request');
-  return fetch(url, {
+
+  var controller = typeof AbortController === 'function' ? new AbortController() : null;
+  var options = {
     headers: {
       Accept: 'application/json',
       'User-Agent': 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36',
@@ -143,8 +145,15 @@ function request(url, deadline) {
       'Origin': 'https://cinema.albox.co',
       'Accept-Language': 'en-US,en;q=0.9'
     }
-  })
-  .then(function (response) {
+  };
+  if (controller) options.signal = controller.signal;
+
+  var timeoutMs = deadline ? Math.max(0, deadline - Date.now()) : 0;
+  var timeoutId = null;
+  var fetchPromise = Promise.resolve().then(function () {
+    return fetch(url, options);
+  });
+  var requestPromise = fetchPromise.then(function (response) {
     return response.text().then(function (body) {
       if (!response.ok) {
         throw new Error('HTTP ' + response.status + ': ' + redactSensitive(url) + ' | BODY: ' + redactSensitive(body.slice(0, 700)));
@@ -155,6 +164,19 @@ function request(url, deadline) {
         throw new Error('Invalid JSON from ' + redactSensitive(url) + ': ' + redactSensitive(body.slice(0, 300)));
       }
     });
+  });
+
+  if (!deadline) return requestPromise;
+
+  var timeoutPromise = new Promise(function (resolve, reject) {
+    timeoutId = setTimeout(function () {
+      if (controller) controller.abort();
+      reject(new Error('CinemaBox HTTP request timed out before provider deadline'));
+    }, timeoutMs);
+  });
+
+  return Promise.race([requestPromise, timeoutPromise]).finally(function () {
+    if (timeoutId !== null) clearTimeout(timeoutId);
   });
 }
 
