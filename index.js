@@ -477,7 +477,7 @@ function fetchStreams(type, id, suppliedMeta) {
         if (video && typeof video.url === 'string' && /^https?:\/\//i.test(video.url)) {
           var quality = video.quality || 'Video';
           streams.push({
-            name: 'Cinema Box · ' + quality,
+            name: displayTitle,
             title: displayTitle + ' · ' + quality,
             url: video.url,
             quality: quality
