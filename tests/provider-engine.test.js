@@ -234,6 +234,24 @@ test('times out a slow provider and still returns healthy provider streams', asy
   assert.equal(result.streams.length, 1);
 });
 
+test('does not count providers when the shared deadline has already expired', async () => {
+  let calls = 0;
+  const engine = createProviderEngine({
+    providers: [{
+      id: 'not-started',
+      getStreams: async () => {
+        calls += 1;
+        return [{ url: 'https://cdn.example/never.mp4', quality: '1080p' }];
+      }
+    }]
+  });
+  const result = await engine.getStreams({ deadline: Date.now() - 1 });
+  assert.equal(result.providers[0].status, 'deadline-exceeded');
+  assert.equal(result.streams.length, 0);
+  assert.equal(calls, 0);
+  assert.equal(engine.getHealth()['not-started'].attempts, 0);
+});
+
 test('supports a provider-specific timeout shorter than the global budget', async () => {
   const engine = createProviderEngine({ providerTimeoutMs: 1000, providers: [
     { id: 'short', timeoutMs: 100, getStreams: () => new Promise(() => {}) }
