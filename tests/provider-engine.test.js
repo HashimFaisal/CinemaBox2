@@ -65,3 +65,15 @@ test('quality rank handles UHD and unknown labels', () => {
   assert.ok(qualityRank('1080p') > qualityRank('720p'));
   assert.equal(qualityRank('unknown'), -1);
 });
+
+
+test('times out a slow provider and still returns healthy provider streams', async () => {
+  const engine = createProviderEngine({ providerTimeoutMs: 100, maxConcurrency: 2, providers: [
+    { id: 'slow', getStreams: () => new Promise(() => {}) },
+    { id: 'fast', getStreams: async () => [{ url: 'https://cdn.example/fast.mp4', quality: '720p' }] }
+  ] });
+  const result = await engine.getStreams({});
+  assert.equal(result.providers[0].status, 'timeout');
+  assert.equal(result.providers[1].status, 'ok');
+  assert.equal(result.streams.length, 1);
+});
