@@ -674,6 +674,24 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
         qualityCounts[stream.quality] = (qualityCounts[stream.quality] || 0) + 1;
       });
       console.log('[STREAM QUALITY SUMMARY]', JSON.stringify(qualityCounts));
+      var rawQualities = [];
+      var seenQualities = new Set();
+      playerVideos.forEach(function (video) {
+        var quality = normalizeQuality(video && video.quality);
+        if (!seenQualities.has(quality)) {
+          seenQualities.add(quality);
+          rawQualities.push(quality);
+        }
+      });
+      var has2160p = rawQualities.some(function (quality) {
+        return /^(?:2160p|4k|uhd)$/i.test(String(quality).trim());
+      });
+      console.log('[CINEMABOX QUALITY AUDIT]', JSON.stringify({
+        rawVideos: playerVideos.length,
+        validUniqueStreams: streams.length,
+        qualities: rawQualities,
+        has2160p: has2160p
+      }));
       if (playerVideos.length > 0 && streams.length === 0) {
         diagnostic('player', 'NO_VALID_STREAM_URLS', type, id);
       }
