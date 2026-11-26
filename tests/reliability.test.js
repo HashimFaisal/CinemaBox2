@@ -20,7 +20,7 @@ function loadInternals(fetchImpl, logger) {
     console: logger || { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, streamQualityRank, streamHealthScore, rankStreamVideos, findEpisode, buildStream, fetchStreams, ensureBudget, request, requestWithRetry, getPlayer, getStreamsForNuvio };',
+    source + '\nmodule.exports.__test = { redactSensitive, logStageMetric, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, streamQualityRank, streamHealthScore, rankStreamVideos, findEpisode, buildStream, fetchStreams, ensureBudget, request, requestWithRetry, getPlayer, getStreamsForNuvio };',
     sandbox,
     { filename: 'index.js' }
   );
@@ -48,6 +48,24 @@ test('fresh callers do not inherit a nearly-expired in-flight cache deadline', a
   assert.equal(calls, 2, 'fresh caller should start independent work');
   releaseOld('older-result');
   assert.equal(await oldCall, 'older-result');
+});
+
+test('stage metrics emit structured duration and outcome without identifiers', () => {
+  const logs = [];
+  const api = loadInternals(() => {}, {
+    log(...args) { logs.push(args.join(' ')); },
+    error() {}
+  });
+
+  api.logStageMetric('search', Date.now() - 25, 'match');
+  const event = logs.find(line => line.includes('[CINEMABOX METRIC]'));
+  assert.ok(event, 'expected a structured metric event');
+  const payload = JSON.parse(event.slice(event.indexOf('{')));
+  assert.equal(payload.stage, 'search');
+  assert.equal(payload.outcome, 'match');
+  assert.ok(Number.isFinite(payload.durationMs));
+  assert.ok(payload.durationMs >= 0);
+  assert.equal(event.includes('tt1234567'), false);
 });
 
 test('HTTP timing diagnostics report endpoint and duration without query secrets', async () => {
