@@ -159,15 +159,35 @@ function createProviderEngine(options) {
   async function getStreams(context) {
     const input = context || {};
     const results = new Array(providers.length);
-    let cursor = 0;
-    async function worker() {
-      while (true) {
-        const index = cursor++;
-        if (index >= providers.length) return;
-        results[index] = await runOne(providers[index], input);
+    const primaryIndexes = [];
+    const fallbackIndexes = [];
+    providers.forEach((provider, index) => {
+      (provider.fallbackOnlyWhenEmpty === true ? fallbackIndexes : primaryIndexes).push(index);
+    });
+    async function runIndexes(indexes) {
+      let cursor = 0;
+      async function worker() {
+        while (true) {
+          const position = cursor++;
+          if (position >= indexes.length) return;
+          const index = indexes[position];
+          results[index] = await runOne(providers[index], input);
+        }
       }
+      await Promise.all(Array.from({ length: Math.min(concurrency, indexes.length) }, () => worker()));
     }
-    await Promise.all(Array.from({ length: Math.min(concurrency, providers.length) }, () => worker()));
+    await runIndexes(primaryIndexes);
+    const primaryHasStreams = primaryIndexes.some(index =>
+      results[index] && results[index].streams.length > 0
+    );
+    if (!primaryHasStreams && fallbackIndexes.length) await runIndexes(fallbackIndexes);
+    fallbackIndexes.forEach(index => {
+      if (!results[index]) results[index] = {
+        providerId: providers[index].id,
+        status: 'skipped-primary-success',
+        streams: []
+      };
+    });
     const seen = new Set();
     const streams = [];
     results.forEach(result => result.streams.forEach(stream => {
