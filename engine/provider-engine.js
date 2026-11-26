@@ -70,21 +70,27 @@ function createProviderEngine(options) {
 
     let timer;
     let timedOut = false;
-    const timeout = new Promise((_, reject) => {
-      timer = schedule(() => { timedOut = true; reject(new Error('PROVIDER_TIMEOUT')); }, Math.max(1, deadline - now()));
-    });
     try {
       const work = Promise.resolve().then(() => provider.getStreams(Object.assign({}, context, {
         providerId: provider.id, deadline: deadline
       })));
-      const result = await Promise.race([work, timeout]);
-      cancel(timer);
+      // Embedded runtimes may retain completed timeout handles after clearTimeout.
+      let result;
+      if (provider.skipTimeoutTimer === true) {
+        result = await work;
+      } else {
+        const timeout = new Promise((_, reject) => {
+          timer = schedule(() => { timedOut = true; reject(new Error('PROVIDER_TIMEOUT')); }, Math.max(1, deadline - now()));
+        });
+        result = await Promise.race([work, timeout]);
+        cancel(timer);
+      }
       state.failures = 0;
       state.openUntil = 0;
       const raw = Array.isArray(result) ? result : (result && Array.isArray(result.streams) ? result.streams : []);
       return { providerId: provider.id, status: 'ok', streams: raw.map(item => normalizeStream(item, provider)).filter(Boolean) };
     } catch (error) {
-      cancel(timer);
+      if (timer !== undefined) cancel(timer);
       state.failures += 1;
       if (state.failures >= failureThreshold) state.openUntil = now() + cooldownMs;
       return { providerId: provider.id, status: timedOut ? 'timeout' : 'error', streams: [] };
