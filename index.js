@@ -184,6 +184,33 @@ function request(url, deadline) {
   });
 }
 
+function requestWithRetry(url, deadline, maxRetries) {
+  var retries = Number.isInteger(maxRetries) && maxRetries >= 0 ? maxRetries : 1;
+
+  function attempt(index) {
+    ensureBudget(deadline, 'retryable HTTP request');
+    return request(url, deadline).catch(function (error) {
+      var message = String(error && error.message || error);
+      var retryable = /HTTP (?:408|425|429|500|502|503|504)\\b/.test(message) ||
+        /network|fetch failed|timeout|timed out|ECONN|ENOTFOUND|EAI_AGAIN/i.test(message);
+      if (!retryable || index >= retries) throw error;
+
+      var delay = 200 * (index + 1);
+      console.log('[HTTP RETRY]', 'attempt:', index + 2,
+        'maxAttempts:', retries + 1, 'delayMs:', delay,
+        'reason:', /HTTP \\d+/.test(message) ? message.match(/HTTP \\d+/)[0] : 'network');
+      return new Promise(function (resolve) {
+        setTimeout(resolve, delay);
+      }).then(function () {
+        ensureBudget(deadline, 'HTTP retry');
+        return attempt(index + 1);
+      });
+    });
+  }
+
+  return attempt(0);
+}
+
 function api(path, deadline) {
   return request(BASE + '/' + path, deadline);
 }
@@ -237,19 +264,19 @@ function getDetails(id, seasonId, deadline) {
   var key = 'details-' + id + '-' + (seasonId || 'default');
   return cached(key, function () {
     console.log('[DETAILS FETCH]', 'show:', id, 'seasonId:', seasonId || 'default');
-    return api('shows/shows/dynamic/' + id + suffix, deadline);
+    return requestWithRetry(BASE + '/shows/shows/dynamic/' + id + suffix, deadline, 1);
   }, DETAILS_CACHE_TTL_MS);
 }
 
 function getPlayer(episodeId, deadline) {
   return cached('player-' + episodeId, function () {
-    return api('shows/episodes/player/' + episodeId, deadline);
+    return requestWithRetry(BASE + '/shows/episodes/player/' + episodeId, deadline, 1);
   }, PLAYER_CACHE_TTL_MS);
 }
 
 function getExternalMeta(type, id, deadline) {
   return cached('external-' + type + '-' + id, function () {
-    return request(CINEMETA + '/meta/' + type + '/' + encodeURIComponent(id) + '.json', deadline).then(function (data) {
+    return requestWithRetry(CINEMETA + '/meta/' + type + '/' + encodeURIComponent(id) + '.json', deadline, 1).then(function (data) {
       if (!data.meta || !data.meta.name) throw new Error('No external metadata for ' + id);
       return data.meta;
     });
@@ -831,7 +858,7 @@ function getTmdbMetadata(tmdbId, mediaType, deadline) {
     '&append_to_response=external_ids';
 
   return cached('tmdb-meta-' + kind + '-' + tmdbId, function () {
-    return request(url, deadline).then(function (data) {
+    return requestWithRetry(url, deadline, 1).then(function (data) {
       var imdbId = data.imdb_id || (data.external_ids && data.external_ids.imdb_id);
       var name = data.title || data.name;
       if (!imdbId || !name) throw new Error('TMDB metadata is incomplete for ' + tmdbId);
