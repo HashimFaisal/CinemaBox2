@@ -686,10 +686,10 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
   .catch(function (error) {
     var message = String(error && error.message || error);
     var code = /time budget exceeded/i.test(message) ? 'TIME_BUDGET_EXCEEDED' :
-      (/HTTP (401|403)\\b/.test(message) ? 'UPSTREAM_AUTH_ERROR' :
-      (/HTTP (429)\\b/.test(message) ? 'UPSTREAM_RATE_LIMIT' :
-      (/HTTP (5\\d\\d)\\b/.test(message) ? 'UPSTREAM_SERVER_ERROR' :
-      (/HTTP (4\\d\\d)\\b/.test(message) ? 'UPSTREAM_CLIENT_ERROR' :
+      (/HTTP (401|403)\b/.test(message) ? 'UPSTREAM_AUTH_ERROR' :
+      (/HTTP (429)\b/.test(message) ? 'UPSTREAM_RATE_LIMIT' :
+      (/HTTP (5\d\d)\b/.test(message) ? 'UPSTREAM_SERVER_ERROR' :
+      (/HTTP (4\d\d)\b/.test(message) ? 'UPSTREAM_CLIENT_ERROR' :
       (/network|fetch failed|timeout|timed out|ECONN|ENOTFOUND|EAI_AGAIN/i.test(message) ? 'NETWORK_ERROR' :
       (/Invalid JSON/i.test(message) ? 'INVALID_UPSTREAM_JSON' : 'UNEXPECTED_ERROR'))))));
     diagnostic(failureStage, code, type, id, error);
@@ -774,11 +774,19 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
       console.log('[TIMING] TMDB metadata:', Date.now() - tmdbStart, 'ms');
       return run(resolved.imdbId, resolved.meta);
     }).catch(function (error) {
-      console.error('[TMDB METADATA]', rawId, error.message);
+      var message = String(error && error.message || error);
+      var code = /time budget exceeded/i.test(message) ? 'TIME_BUDGET_EXCEEDED' :
+        (/HTTP (401|403)\b/.test(message) ? 'UPSTREAM_AUTH_ERROR' :
+        (/HTTP 429\b/.test(message) ? 'UPSTREAM_RATE_LIMIT' :
+        (/HTTP 5\d\d\b/.test(message) ? 'UPSTREAM_SERVER_ERROR' :
+        (/HTTP 4\d\d\b/.test(message) ? 'UPSTREAM_CLIENT_ERROR' :
+        (/network|fetch failed|timeout|timed out|ECONN|ENOTFOUND|EAI_AGAIN/i.test(message) ? 'NETWORK_ERROR' :
+        (/Invalid JSON/i.test(message) ? 'INVALID_UPSTREAM_JSON' : 'UNEXPECTED_ERROR'))))));
+      diagnostic('tmdb_metadata', code, rawType, rawId, error);
       return [];
     });
   }).catch(function (error) {
-    console.error('[CINEMA BOX NUVIO]', error);
+    diagnostic('entry', 'UNEXPECTED_ERROR', 'unknown', 'unknown', error);
     return [];
   });
 }
