@@ -180,8 +180,10 @@ test('Arabic title normalization ignores diacritics and tatweel', () => {
 });
 
 
-test('stream objects expose quality as a separate Nuvio field', () => {
+test('stream objects expose quality as a separate Nuvio field and reject invalid URLs', () => {
   const api = loadInternals(() => {});
+  assert.equal(api.buildStream({ url: '', quality: '1080p' }, 'Invalid stream'), null);
+  assert.equal(api.buildStream({ url: 'https:///missing-host.mp4', quality: '1080p' }, 'Invalid stream'), null);
   const stream = api.buildStream({
     url: 'https://cdn.example/1080p.mp4',
     quality: '1080p'
