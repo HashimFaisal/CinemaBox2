@@ -109,6 +109,21 @@ test('tracks provider latency, reliability, and valid stream yield', async () =>
   assert.deepEqual(second.streams.filter(stream => stream.quality === '1080p').map(stream => stream.providerId), ['steady', 'flaky']);
 });
 
+test('empty or invalid provider results do not count as productive successes', async () => {
+  const engine = createProviderEngine({ providers: [
+    { id: 'empty', getStreams: async () => [{ url: 'not-a-url', quality: '1080p' }] }
+  ] });
+  const result = await engine.getStreams({});
+  const health = engine.getHealth().empty;
+  assert.equal(result.providers[0].status, 'ok');
+  assert.equal(result.streams.length, 0);
+  assert.equal(health.attempts, 1);
+  assert.equal(health.successes, 0);
+  assert.equal(health.successRate, 0);
+  assert.equal(health.validStreams, 0);
+  assert.equal(health.lastStatus, 'empty');
+});
+
 test('quality rank handles UHD and unknown labels', () => {
   assert.ok(qualityRank('2160p HDR') > qualityRank('1080p'));
   assert.ok(qualityRank('1080p') > qualityRank('720p'));
