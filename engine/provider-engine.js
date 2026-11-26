@@ -5,19 +5,19 @@ const QUALITY = { '2160p': 2160, '1440p': 1440, '1080p': 1080, '720p': 720, '480
 function normalizeQuality(value) {
   const raw = String(value == null ? '' : value).trim();
   if (!raw) return 'Video';
-  let match = raw.match(/^(?:4\\s*k|uhd)(?:\\s+(.+))?$/i);
+  let match = raw.match(/^(?:4\s*k|uhd)(?:\s+(.+))?$/i);
   if (match) return '2160p' + (match[1] ? ' ' + match[1].trim() : '');
-  match = raw.match(/^(\\d{3,4})\\s*p(?:\\s+(.+))?$/i) || raw.match(/^(\\d{3,4})p$/i);
+  match = raw.match(/^(\d{3,4})\s*p(?:\s+(.+))?$/i) || raw.match(/^(\d{3,4})p$/i);
   return match ? match[1] + 'p' + (match[2] ? ' ' + match[2].trim() : '') : raw;
 }
 
 function qualityRank(value) {
-  const match = normalizeQuality(value).match(/^(\\d{3,4})p/i);
+  const match = normalizeQuality(value).match(/^(\d{3,4})p/i);
   return match ? Number(match[1]) : (QUALITY[String(value).toLowerCase()] || -1);
 }
 
 function validHttpUrl(value) {
-  if (typeof value !== 'string' || !value || value !== value.trim() || /\\s|\\\\/.test(value)) return false;
+  if (typeof value !== 'string' || !value || value !== value.trim() || /\s|\\/.test(value)) return false;
   try {
     const parsed = new URL(value);
     return (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
