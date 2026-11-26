@@ -1,0 +1,12 @@
+{
+  "name": "cinemabox-nuvio-plugin",
+  "version": "2.1.5",
+  "private": true,
+  "description": "CinemaBox scraper plugin for Nuvio",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
