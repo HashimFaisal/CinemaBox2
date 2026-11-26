@@ -258,3 +258,34 @@ test('permanent HTTP search errors are not retried', async () => {
   await assert.rejects(api.searchCinemaBox('Missing', 'movie'));
   assert.equal(calls, 1, 'a permanent 404 should not be retried');
 });
+
+
+test('successful empty primary search uses original title only once', async () => {
+  let originalCalls = 0;
+  const api = loadInternals((url) => {
+    if (url.includes('term=Primary')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ results: [] }))
+      });
+    }
+    if (url.includes('term=Original')) {
+      originalCalls++;
+      return Promise.resolve({
+        ok: false,
+        status: 503,
+        text: () => Promise.resolve('temporarily unavailable')
+      });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  });
+
+  const result = await api.fetchStreams('movie', 'tt7654321', {
+    name: 'Primary',
+    original_name: 'Original',
+    year: ''
+  });
+
+  assert.deepEqual(Array.from(result.streams), []);
+  assert.equal(originalCalls, 2, 'one original-title search with one transient retry is expected');
+});
