@@ -73,6 +73,7 @@ function createProviderEngine(options) {
         typeof provider.getStreams !== 'function') throw new TypeError('Invalid provider contract');
     if (!health.has(provider.id)) health.set(provider.id, {
       failures: 0, openUntil: 0, attempts: 0, successes: 0, validStreams: 0,
+      emptyResponses: 0, errorCount: 0, timeoutCount: 0, rejectedStreams: 0,
       latencyEwmaMs: null, lastStatus: 'never', lastCooldownMs: 0
     });
   });
@@ -121,7 +122,9 @@ function createProviderEngine(options) {
         }
       });
       const rejectedStreams = raw.length - streams.length;
+      state.rejectedStreams += rejectedStreams;
       if (streams.length > 0) state.successes += 1;
+      else state.emptyResponses += 1;
       state.lastStatus = streams.length > 0 ? 'ok' : 'empty';
       state.validStreams += streams.length;
       return {
@@ -137,6 +140,8 @@ function createProviderEngine(options) {
       if (timer !== undefined) cancel(timer);
       const elapsedMs = Math.max(0, now() - startedAt);
       state.failures += 1;
+      state.errorCount += 1;
+      if (timedOut) state.timeoutCount += 1;
       state.lastStatus = timedOut ? 'timeout' : 'error';
       state.latencyEwmaMs = state.latencyEwmaMs == null ? elapsedMs : (state.latencyEwmaMs * 0.7) + (elapsedMs * 0.3);
       if (state.failures >= failureThreshold) {
@@ -195,6 +200,9 @@ function createProviderEngine(options) {
         cooldownMs: state.lastCooldownMs,
         attempts: state.attempts, successes: state.successes,
         successRate: state.attempts ? state.successes / state.attempts : null,
+        productiveRate: state.attempts ? state.successes / state.attempts : null,
+        emptyResponses: state.emptyResponses, errorCount: state.errorCount,
+        timeoutCount: state.timeoutCount, rejectedStreams: state.rejectedStreams,
         validStreams: state.validStreams, latencyEwmaMs: state.latencyEwmaMs,
         lastStatus: state.lastStatus
       };
