@@ -13,6 +13,9 @@ function loadInternals(fetchImpl) {
     URL,
     module: { exports: {} },
     fetch: fetchImpl,
+    setTimeout,
+    clearTimeout,
+    AbortController,
     TMDB_API_KEY: 'test-secret-key',
     console: { log() {}, error() {} }
   };
