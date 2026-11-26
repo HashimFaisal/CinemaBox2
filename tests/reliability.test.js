@@ -16,7 +16,7 @@ function loadInternals(fetchImpl) {
     console: { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, uniqueStreamVideos, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget };',
+    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, uniqueStreamVideos, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, getPlayer };',
     sandbox,
     { filename: 'index.js' }
   );
@@ -363,4 +363,141 @@ test('stream deduplication preserves distinct signed query strings', () => {
     'https://cdn.example/video.mp4?token=one',
     'https://cdn.example/video.mp4?token=two'
   ]);
+});
+
+
+test('request rejects a successful HTTP response containing malformed JSON', async () => {
+  const api = loadInternals(() => Promise.resolve({
+    ok: true,
+    text: () => Promise.resolve('{"videos":')
+  }));
+
+  await assert.rejects(
+    api.request('https://cinema.albox.co/api/v4/test'),
+    /Invalid JSON from/
+  );
+});
+
+test('request rejects an empty successful HTTP response instead of treating it as empty data', async () => {
+  const api = loadInternals(() => Promise.resolve({
+    ok: true,
+    text: () => Promise.resolve('')
+  }));
+
+  await assert.rejects(
+    api.request('https://cinema.albox.co/api/v4/test'),
+    /Invalid JSON from/
+  );
+});
+
+test('player endpoint rejects malformed JSON and evicts the failed cache entry', async () => {
+  let calls = 0;
+  const api = loadInternals(() => {
+    calls++;
+    return Promise.resolve({
+      ok: true,
+      text: () => Promise.resolve('{not-json')
+    });
+  });
+
+  await assert.rejects(api.getPlayer('player-malformed'));
+  await assert.rejects(api.getPlayer('player-malformed'));
+  assert.equal(calls, 2, 'failed player responses must not remain cached');
+});
+
+test('movie lookup returns no streams when details payload lacks post_info', async () => {
+  const api = loadInternals((url) => {
+    if (url.includes('/search?')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 901, title: 'Malformed Details Movie', type: 'MOVIE' }]
+        }))
+      });
+    }
+    if (url.includes('/shows/shows/dynamic/901')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ sections: [] }))
+      });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  });
+
+  const result = await api.fetchStreams('movie', 'tt9010001', {
+    name: 'Malformed Details Movie',
+    original_name: 'Malformed Details Movie',
+    year: ''
+  });
+
+  assert.deepEqual(Array.from(result.streams), []);
+});
+
+test('movie lookup returns no streams when player videos field has an unexpected type', async () => {
+  const api = loadInternals((url) => {
+    if (url.includes('/search?')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 902, title: 'Malformed Player Movie', type: 'MOVIE' }]
+        }))
+      });
+    }
+    if (url.includes('/shows/shows/dynamic/902')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          post_info: { episode_id: 9902 }
+        }))
+      });
+    }
+    if (url.includes('/shows/episodes/player/9902')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ videos: 'not-an-array' }))
+      });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  });
+
+  const result = await api.fetchStreams('movie', 'tt9020001', {
+    name: 'Malformed Player Movie',
+    original_name: 'Malformed Player Movie',
+    year: ''
+  });
+
+  assert.deepEqual(Array.from(result.streams), []);
+});
+
+test('movie lookup safely returns no streams when the player endpoint has a transient network failure', async () => {
+  const api = loadInternals((url) => {
+    if (url.includes('/search?')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 903, title: 'Player Network Failure Movie', type: 'MOVIE' }]
+        }))
+      });
+    }
+    if (url.includes('/shows/shows/dynamic/903')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          post_info: { episode_id: 9903 }
+        }))
+      });
+    }
+    if (url.includes('/shows/episodes/player/9903')) {
+      return Promise.reject(new Error('simulated player network failure'));
+    }
+    throw new Error('Unexpected URL: ' + url);
+  });
+
+  const result = await api.fetchStreams('movie', 'tt9030001', {
+    name: 'Player Network Failure Movie',
+    original_name: 'Player Network Failure Movie',
+    year: ''
+  });
+
+  assert.deepEqual(Array.from(result.streams), []);
 });
