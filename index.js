@@ -122,7 +122,8 @@ function searchCinemaBox(title, type, year) {
       var ranked = [];
       items.forEach(function (item) {
         var candidateTitle = normalizeTitle(item.title);
-        var score = titleScore(title, item.title);
+        var rawTitleScore = titleScore(title, item.title);
+        var score = rawTitleScore;
         var resultYear = releaseYear(item.year);
 
         if (queryTitle !== candidateTitle && queryTitle.split(' ').length === 1 && candidateTitle.split(' ').length > 1) {
@@ -133,7 +134,7 @@ function searchCinemaBox(title, type, year) {
           if (year === resultYear) score += 0.1;
           else score -= 0.1;
         }
-        ranked.push({ item: item, score: score });
+        ranked.push({ item: item, score: score, titleScore: rawTitleScore, resultYear: resultYear });
       });
       ranked.sort(function (a, b) { return b.score - a.score; });
       return ranked[0] || null;
@@ -152,7 +153,16 @@ function searchCinemaBox(title, type, year) {
     // ابدأ ببحث الاسم فقط؛ استخدم الاسم مع السنة كاحتياط عند غياب التطابق القوي.
     function fetchFirstPage(term) {
       var queryStr = 'page_size=25&page_number=1&term=' + encodeURIComponent(term);
-      return api('search?' + queryStr).then(addResults).catch(function (error) {
+      return api('search?' + queryStr).then(function (data) {
+        var count = addResults(data);
+        var best = rankItems(Array.from(foundItems.values()));
+        console.log('[SEARCH PAGE]', 'term:', term, 'page: 1', 'returned:', count,
+          'best:', best ? best.item.title : 'none',
+          'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
+          'score:', best ? best.score.toFixed(2) : 'n/a',
+          'year:', best ? (best.resultYear || 'unknown') : 'n/a');
+        return count;
+      }).catch(function (error) {
         console.warn('[SEARCH PAGE ERROR]', term, 'page', 1, error && error.message ? error.message : error);
         return 0;
       });
@@ -164,7 +174,19 @@ function searchCinemaBox(title, type, year) {
       return api('search?' + queryStr).then(function (data) {
         var count = addResults(data);
         var best = rankItems(Array.from(foundItems.values()));
-        if ((best && best.score >= 0.95) || count < 25) return;
+        console.log('[SEARCH PAGE]', 'term:', term, 'page:', pageNum, 'returned:', count,
+          'best:', best ? best.item.title : 'none',
+          'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
+          'score:', best ? best.score.toFixed(2) : 'n/a',
+          'year:', best ? (best.resultYear || 'unknown') : 'n/a');
+        if (best && best.score >= 0.95) {
+          console.log('[SEARCH STOP]', 'reason: strong-score', 'score:', best.score.toFixed(2));
+          return;
+        }
+        if (count < 25) {
+          console.log('[SEARCH STOP]', 'reason: last-page', 'returned:', count);
+          return;
+        }
         return fetchMorePages(term, pageNum + 1);
       }).catch(function (error) {
         console.warn('[SEARCH PAGE ERROR]', term, 'page', pageNum, error && error.message ? error.message : error);
@@ -173,15 +195,32 @@ function searchCinemaBox(title, type, year) {
 
     return fetchFirstPage(title).then(function (firstCount) {
       var best = rankItems(Array.from(foundItems.values()));
-      if (best && best.score >= 0.95) return;
+      if (best && best.score >= 0.95) {
+        console.log('[SEARCH STOP]', 'reason: first-page-strong-match', 'title:', best.item.title,
+          'titleScore:', best.titleScore.toFixed(2), 'score:', best.score.toFixed(2));
+        return;
+      }
 
+      console.log('[SEARCH FALLBACK]', 'reason:', best ? 'best-score-below-0.95' : 'no-results',
+        'query:', title, 'year:', year || 'none',
+        'best:', best ? best.item.title : 'none',
+        'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
+        'score:', best ? best.score.toFixed(2) : 'n/a');
       var fallbackTerm = year ? title + ' ' + year : null;
       var fallbackSearch = fallbackTerm ? fetchFirstPage(fallbackTerm) : Promise.resolve(0);
 
       return fallbackSearch.then(function (fallbackCount) {
         best = rankItems(Array.from(foundItems.values()));
-        if (best && best.score >= 0.95) return;
+        if (best && best.score >= 0.95) {
+          console.log('[SEARCH STOP]', 'reason: fallback-strong-match', 'title:', best.item.title,
+            'titleScore:', best.titleScore.toFixed(2), 'score:', best.score.toFixed(2));
+          return;
+        }
 
+        console.log('[SEARCH PAGINATION]', 'reason: no-strong-match-after-first-pages',
+          'best:', best ? best.item.title : 'none',
+          'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
+          'score:', best ? best.score.toFixed(2) : 'n/a');
         var pending = [];
         if (firstCount >= 25) pending.push(fetchMorePages(title, 2));
         if (fallbackTerm && fallbackCount >= 25) pending.push(fetchMorePages(fallbackTerm, 2));
