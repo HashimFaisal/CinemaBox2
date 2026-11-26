@@ -1296,9 +1296,23 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
             quality: stream.quality
           };
         });
+        var providerHealth = cinemaBoxProviderEngine.getHealth();
         console.log('[PROVIDER ENGINE]', JSON.stringify({
           providers: result.providers.map(function (provider) {
-            return { id: provider.providerId, status: provider.status, streams: provider.streams.length };
+            var health = providerHealth[provider.providerId] || {};
+            return {
+              id: provider.providerId,
+              status: provider.status,
+              streams: provider.streams.length,
+              attempts: health.attempts == null ? 0 : health.attempts,
+              successes: health.successes == null ? 0 : health.successes,
+              successRate: health.successRate,
+              validStreams: health.validStreams == null ? 0 : health.validStreams,
+              latencyEwmaMs: health.latencyEwmaMs,
+              lastStatus: health.lastStatus || provider.status,
+              circuitOpen: health.circuitOpen === true,
+              retryAt: health.retryAt
+            };
           }),
           totalStreams: streams.length
         }));
