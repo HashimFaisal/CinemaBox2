@@ -123,10 +123,10 @@ function searchCinemaBox(title, type, year) {
       if (qIndex >= queries.length) return Promise.resolve(foundItems);
       var term = queries[qIndex];
 
-      function fetchPage() {
-        // مثل Cinemana: صفحة واحدة فقط لكل استعلام لتقليل طلبات البحث.
-        // نبقي page_number=1 كما يتطلب CinemaBox API.
-        var queryStr = 'page_size=25&page_number=1&term=' + encodeURIComponent(term);
+      function fetchPage(pageNum) {
+        if (pageNum > 5) return Promise.resolve();
+
+        var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
 
         return api('search?' + queryStr).then(function (data) {
           var results = (data.results || []).filter(function (item) {
@@ -135,8 +135,10 @@ function searchCinemaBox(title, type, year) {
           results.forEach(function (item) {
             if (item.id) foundItems.set(String(item.id), item);
           });
+          if ((data.results || []).length < 25) return Promise.resolve();
+          return fetchPage(pageNum + 1);
         }).catch(function (error) {
-          console.warn('[SEARCH PAGE ERROR]', term, 'page 1', error && error.message ? error.message : error);
+          console.warn('[SEARCH PAGE ERROR]', term, 'page', pageNum, error && error.message ? error.message : error);
           return Promise.resolve();
         });
       }
