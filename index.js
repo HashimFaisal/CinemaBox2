@@ -62,24 +62,38 @@ function cached(key, loader, ttl) {
   return value;
 }
 
+function validateStreamUrl(value) {
+  if (typeof value !== 'string' || !value || value !== value.trim() ||
+      value.indexOf('\\') !== -1 || /\s/.test(value)) return false;
+  try {
+    var parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    if (!parsed.hostname || parsed.username || parsed.password) return false;
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 function uniqueStreamVideos(videos) {
   var seen = new Set();
   return (Array.isArray(videos) ? videos : []).filter(function (video) {
-    if (!video || typeof video.url !== 'string') return false;
-    var url = video.url;
-    // Reject incomplete or malformed HTTP URLs before handing them to the player.
-    if (url !== url.trim() || url.indexOf('\\') !== -1 || /\s/.test(url)) return false;
-    var protocolEnd = url.indexOf('://');
-    if (protocolEnd < 0) return false;
-    var protocol = url.slice(0, protocolEnd).toLowerCase();
-    if (protocol !== 'http' && protocol !== 'https') return false;
-    var authority = url.slice(protocolEnd + 3).split(/[/?#]/, 1)[0];
-    if (!authority || authority.charAt(0) === '.' || authority.charAt(authority.length - 1) === ':') return false;
+    if (!video || !validateStreamUrl(video.url)) return false;
     // Keep the original URL untouched: signed query strings may be order-sensitive.
-    if (seen.has(url)) return false;
-    seen.add(url);
+    // A repeated URL is one endpoint, not an additional quality.
+    if (seen.has(video.url)) return false;
+    seen.add(video.url);
     return true;
   });
+}
+
+function normalizeQuality(value) {
+  if (value == null || value === '') return 'Video';
+  var quality = String(value).trim();
+  if (!quality) return 'Video';
+  var match = quality.match(/^(\d{3,4})\s*p$/i);
+  if (match) return match[1] + 'p';
+  return quality;
 }
 function request(url, deadline) {
   ensureBudget(deadline, 'HTTP request');
@@ -505,7 +519,7 @@ function resolveImdbId(id, mediaType, deadline) {
   });
 }
 function buildStream(video, displayTitle) {
-  var quality = video.quality || 'Video';
+  var quality = normalizeQuality(video.quality);
   var streamLabel = 'CinemaBox (' + displayTitle + ') ' + quality;
   return {
     name: streamLabel,
@@ -597,18 +611,21 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
         'playerKeys:', Object.keys(player || {}),
         'videosType:', Array.isArray(player && player.videos) ? 'array' : typeof (player && player.videos),
         'videosCount:', playerVideos.length);
+      var qualityCounts = Object.create(null);
       playerVideos.forEach(function (video, index) {
         var videoUrl = video && video.url;
-        var validUrl = typeof videoUrl === 'string' && /^https?:\/\//i.test(videoUrl);
+        var validUrl = validateStreamUrl(videoUrl);
+        var quality = normalizeQuality(video && video.quality);
         console.log('[PLAYER VIDEO]', 'index:', index,
-          'keys:', Object.keys(video || {}),
-          'urlType:', typeof videoUrl,
-          'validHttpUrl:', validUrl,
-          'quality:', video && video.quality ? video.quality : 'unknown');
+          'urlValid:', validUrl,
+          'quality:', quality);
       });
       uniqueStreamVideos(playerVideos).forEach(function (video) {
-        streams.push(buildStream(video, displayTitle));
+        var stream = buildStream(video, displayTitle);
+        streams.push(stream);
+        qualityCounts[stream.quality] = (qualityCounts[stream.quality] || 0) + 1;
       });
+      console.log('[STREAM QUALITY SUMMARY]', JSON.stringify(qualityCounts));
       console.log('[STREAMS]', type, id, 'episode:', episodeId,
         'rawVideos:', playerVideos.length, 'uniqueValid:', streams.length,
         'total:', Date.now() - timingStart, 'ms');
