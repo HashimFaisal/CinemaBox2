@@ -19,12 +19,110 @@ function loadInternals(fetchImpl, logger) {
     console: logger || { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { createProviderEngine, redactSensitive, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, requestWithRetry, getPlayer, getStreamsForNuvio };',
+    source + '\nmodule.exports.__test = { createInternetArchiveProvider, createProviderEngine, redactSensitive, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, requestWithRetry, getPlayer, getStreamsForNuvio };',
     sandbox,
     { filename: 'index.js' }
   );
   return sandbox.module.exports.__test;
 }
+
+test('Internet Archive adapter diagnoses empty search results', async () => {
+  const logs = [];
+  const api = loadInternals(() => Promise.resolve({
+    ok: true,
+    json: async () => ({ response: { docs: [] } })
+  }), { log(...args) { logs.push(args.join(' ')); }, error() {} });
+  const provider = api.createInternetArchiveProvider();
+  const streams = await provider.getStreams({ type: 'movie', meta: { name: 'Unavailable Film', year: '2024' } });
+  assert.equal(streams.length, 0);
+  const search = logs.find(line => line.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && line.includes('"stage":"search-complete"'));
+  const complete = logs.find(line => line.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && line.includes('"stage":"complete"'));
+  assert.ok(search);
+  assert.ok(complete);
+  assert.equal(JSON.parse(search.slice(search.indexOf('{'))).rawResults, 0);
+  assert.equal(JSON.parse(complete.slice(complete.indexOf('{'))).streams, 0);
+});
+
+test('Internet Archive adapter returns a valid public-domain video and explains rejected files', async () => {
+  const logs = [];
+  const api = loadInternals(url => {
+    if (url.includes('/advancedsearch.php')) return Promise.resolve({
+      ok: true,
+      json: async () => ({ response: { docs: [
+        { identifier: 'valid-film', title: 'Valid Film', year: '1931' },
+        { identifier: 'restricted-film', title: 'Valid Film', year: '1931' }
+      ] } })
+    });
+    if (url.includes('/metadata/valid-film')) return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        metadata: {
+          title: 'Valid Film',
+          year: '1931',
+          licenseurl: 'https://creativecommons.org/publicdomain/zero/1.0/'
+        },
+        files: [
+          { name: 'valid-film-1080p.mp4', size: '1200000' },
+          { name: 'poster.jpg', size: '20000' },
+          { name: 'private.mp4', size: '1000', private: 'true' },
+          { name: 'empty.mp4', size: '0' },
+          { name: '../unsafe.mp4', size: '1000' },
+          { name: 'metadata.xml', size: '500' }
+        ]
+      })
+    });
+    if (url.includes('/metadata/restricted-film')) return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        metadata: { title: 'Valid Film', year: '1931', rights: 'All rights reserved' },
+        files: [{ name: 'restricted.mp4', size: '1000' }]
+      })
+    });
+    throw new Error('Unexpected URL: ' + url);
+  }, { log(...args) { logs.push(args.join(' ')); }, error() {} });
+  const provider = api.createInternetArchiveProvider();
+  const streams = await provider.getStreams({
+    type: 'movie',
+    meta: { name: 'Valid Film', year: '1931' }
+  });
+  assert.equal(streams.length, 1);
+  assert.equal(streams[0].quality, '1080p');
+  assert.equal(streams[0].url, 'https://archive.org/download/valid-film/valid-film-1080p.mp4');
+  const complete = logs.find(line => line.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && line.includes('"stage":"complete"'));
+  assert.ok(complete);
+  const payload = JSON.parse(complete.slice(complete.indexOf('{')));
+  assert.equal(payload.rawResults, 2);
+  assert.equal(payload.candidates, 2);
+  assert.equal(payload.metadataRecords, 2);
+  assert.equal(payload.filesInspected, 6);
+  assert.equal(payload.playableFiles, 1);
+  assert.equal(payload.streams, 1);
+  assert.equal(payload.rejected.licenseNotPermitted, 1);
+  assert.equal(payload.rejected.unsupportedMedia, 2);
+  assert.equal(payload.rejected.privateOrMetadataFile, 1);
+  assert.equal(payload.rejected.invalidFileSize, 1);
+  assert.equal(payload.rejected.invalidFileName, 1);
+});
+
+test('Internet Archive adapter reports title and year candidate filtering', async () => {
+  const logs = [];
+  const api = loadInternals(() => Promise.resolve({
+    ok: true,
+    json: async () => ({ response: { docs: [
+      { identifier: 'wrong-title', title: 'Different Film', year: '1931' },
+      { identifier: 'wrong-year', title: 'Target Film', year: '1940' },
+      { title: 'Target Film', year: '1931' }
+    ] } })
+  }), { log(...args) { logs.push(args.join(' ')); }, error() {} });
+  const provider = api.createInternetArchiveProvider();
+  const streams = await provider.getStreams({ type: 'movie', meta: { name: 'Target Film', year: '1931' } });
+  assert.equal(streams.length, 0);
+  const search = logs.find(line => line.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && line.includes('"stage":"search-complete"'));
+  const payload = JSON.parse(search.slice(search.indexOf('{')));
+  assert.equal(payload.rawResults, 3);
+  assert.equal(payload.candidates, 0);
+  assert.deepEqual(payload.filtered, { missingIdentifier: 1, titleMismatch: 1, yearMismatch: 1 });
+});
 
 test('bundled provider engine reports rejected streams and recovers after a transient outage', async () => {
   const api = loadInternals(() => {});
