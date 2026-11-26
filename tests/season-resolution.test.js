@@ -10,6 +10,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
 
 function loadInternals(fetchImpl) {
   const sandbox = {
+    URL,
     module: { exports: {} },
     fetch: fetchImpl,
     TMDB_API_KEY: 'test-secret-key',
