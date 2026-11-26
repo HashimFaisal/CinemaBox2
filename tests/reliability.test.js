@@ -336,3 +336,31 @@ test('mixed numbered and unnumbered episode cards never use positional fallback'
   assert.equal(await api.findEpisode(details, 'show-123', 1, 2), null);
   assert.equal(await api.findEpisode(details, 'show-123', 1, 3), 'episode-3');
 });
+
+test('stream validation rejects incomplete and malformed HTTP URLs', () => {
+  const api = loadInternals(() => {});
+  const videos = api.uniqueStreamVideos([
+    { url: 'https://' },
+    { url: 'http://' },
+    { url: 'https:///missing-host.mp4' },
+    { url: 'https://cdn.example/video file.mp4' },
+    { url: 'https://cdn.example\\\\video.mp4' },
+    { url: 'https://cdn.example/video.mp4' }
+  ]);
+  assert.deepEqual(Array.from(videos, video => video.url), [
+    'https://cdn.example/video.mp4'
+  ]);
+});
+
+test('stream deduplication preserves distinct signed query strings', () => {
+  const api = loadInternals(() => {});
+  const videos = api.uniqueStreamVideos([
+    { url: 'https://cdn.example/video.mp4?token=one' },
+    { url: 'https://cdn.example/video.mp4?token=two' },
+    { url: 'https://cdn.example/video.mp4?token=one' }
+  ]);
+  assert.deepEqual(Array.from(videos, video => video.url), [
+    'https://cdn.example/video.mp4?token=one',
+    'https://cdn.example/video.mp4?token=two'
+  ]);
+});
