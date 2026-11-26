@@ -10,13 +10,14 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
 
 function loadInternals(fetchImpl) {
   const sandbox = {
+    URL,
     module: { exports: {} },
     fetch: fetchImpl,
     TMDB_API_KEY: 'test-secret-key',
     console: { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, getPlayer };',
+    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, getPlayer };',
     sandbox,
     { filename: 'index.js' }
   );
@@ -515,4 +516,59 @@ test('movie lookup safely returns no streams when the player endpoint has a tran
   });
 
   assert.deepEqual(Array.from(result.streams), []);
+});
+
+
+test('stream URL validation uses URL parsing and rejects credentials or invalid authorities', () => {
+  const api = loadInternals(() => {});
+  const valid = [
+    'https://cdn.example/video.mp4?token=a%2Fb',
+    'http://192.0.2.10:8080/video.m3u8',
+    'https://cdn.example/path/master.m3u8'
+  ];
+  const invalid = [
+    'https://',
+    'http://',
+    'https:///missing-host.mp4',
+    'https://user:pass@cdn.example/video.mp4',
+    'https://cdn.example:bad/video.mp4',
+    'ftp://cdn.example/video.mp4',
+    'https://cdn.example/video file.mp4',
+    ' https://cdn.example/video.mp4',
+    'https://cdn.example\\\\video.mp4'
+  ];
+  valid.forEach(url => assert.equal(api.validateStreamUrl(url), true, url));
+  invalid.forEach(url => assert.equal(api.validateStreamUrl(url), false, url));
+});
+
+test('three distinct provider qualities remain three independent Nuvio streams', () => {
+  const api = loadInternals(() => {});
+  const videos = [
+    { url: 'https://cdn.example/movie-1080.mp4?sig=a', quality: '1080P' },
+    { url: 'https://cdn.example/movie-720.mp4?sig=b', quality: '720p' },
+    { url: 'https://cdn.example/movie-480.mp4?sig=c', quality: '480P' }
+  ];
+  const streams = api.uniqueStreamVideos(videos).map(video => api.buildStream(video, 'Test Movie'));
+  assert.equal(streams.length, 3);
+  assert.deepEqual(Array.from(streams, stream => stream.quality), ['1080p', '720p', '480p']);
+  assert.deepEqual(Array.from(streams, stream => stream.url), videos.map(video => video.url));
+});
+
+test('same endpoint is not counted twice as two qualities and signed URLs stay distinct', () => {
+  const api = loadInternals(() => {});
+  const videos = api.uniqueStreamVideos([
+    { url: 'https://cdn.example/video.mp4?token=one', quality: '1080p' },
+    { url: 'https://cdn.example/video.mp4?token=one', quality: '720p' },
+    { url: 'https://cdn.example/video.mp4?token=two', quality: '480p' }
+  ]);
+  assert.equal(videos.length, 2);
+  assert.deepEqual(Array.from(videos, video => video.quality), ['1080p', '480p']);
+});
+
+test('unknown provider quality is retained without guessing from the URL', () => {
+  const api = loadInternals(() => {});
+  assert.equal(api.normalizeQuality(''), 'Video');
+  assert.equal(api.normalizeQuality('1080P'), '1080p');
+  assert.equal(api.normalizeQuality('4K HDR'), '4K HDR');
+  assert.equal(api.normalizeQuality(undefined), 'Video');
 });
