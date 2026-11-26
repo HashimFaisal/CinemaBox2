@@ -27,10 +27,18 @@ function ensureBudget(deadline, stage) {
   }
 }
 
-function cached(key, loader, ttl) {
+function cached(key, loader, ttl, deadline) {
   if (ttl == null) ttl = DETAILS_CACHE_TTL_MS;
   var now = Date.now();
   var old = cache.get(key);
+
+  if (old && old.pending && deadline && old.deadline &&
+      deadline > old.deadline + 1000) {
+    // Do not let a fresh invocation inherit a nearly-expired caller's deadline.
+    // Run independently without replacing the older in-flight cache entry.
+    console.log('[CACHE]', 'bypass-stale-pending', 'kind:', String(key).split('-')[0]);
+    return Promise.resolve().then(loader);
+  }
 
   if (old && (old.pending || now < old.expiresAt)) {
     // Share in-flight work and refresh LRU order for every cache hit.
@@ -46,7 +54,7 @@ function cached(key, loader, ttl) {
     console.log('[CACHE]', 'miss', 'kind:', String(key).split('-')[0]);
   }
 
-  var entry = { time: now, expiresAt: 0, pending: true, value: null };
+  var entry = { time: now, expiresAt: 0, pending: true, value: null, deadline: deadline || null };
   var value = Promise.resolve().then(loader).then(function (result) {
     // Start the TTL after successful completion, not when a slow request began.
     if (cache.get(key) === entry) {
@@ -301,13 +309,13 @@ function getDetails(id, seasonId, deadline) {
   return cached(key, function () {
     console.log('[DETAILS FETCH]', 'show:', id, 'seasonId:', seasonId || 'default');
     return requestWithRetry(BASE + '/shows/shows/dynamic/' + id + suffix, deadline, 1);
-  }, DETAILS_CACHE_TTL_MS);
+  }, DETAILS_CACHE_TTL_MS, deadline);
 }
 
 function getPlayer(episodeId, deadline) {
   return cached('player-' + episodeId, function () {
     return requestWithRetry(BASE + '/shows/episodes/player/' + episodeId, deadline, 1);
-  }, PLAYER_CACHE_TTL_MS);
+  }, PLAYER_CACHE_TTL_MS, deadline);
 }
 
 function getExternalMeta(type, id, deadline) {
@@ -316,7 +324,7 @@ function getExternalMeta(type, id, deadline) {
       if (!data.meta || !data.meta.name) throw new Error('No external metadata for ' + id);
       return data.meta;
     });
-  }, METADATA_CACHE_TTL_MS);
+  }, METADATA_CACHE_TTL_MS, deadline);
 }
 
 function searchCinemaBox(title, type, year, deadline) {
@@ -504,7 +512,7 @@ function searchCinemaBox(title, type, year, deadline) {
       console.log('[NOT FOUND]', title, year, type);
       return null;
     });
-  }, SEARCH_CACHE_TTL_MS);
+  }, SEARCH_CACHE_TTL_MS, deadline);
 }
 
 function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadline) {
@@ -951,7 +959,7 @@ function getTmdbMetadata(tmdbId, mediaType, deadline) {
         }
       };
     });
-  }, METADATA_CACHE_TTL_MS);
+  }, METADATA_CACHE_TTL_MS, deadline);
 }
 function getStreamsForNuvio(input, mediaType, season, episode) {
   var requestStart = Date.now();
