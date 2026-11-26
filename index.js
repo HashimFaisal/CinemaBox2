@@ -154,9 +154,11 @@ function searchCinemaBox(title, type, year) {
     function fetchFirstPage(term) {
       var queryStr = 'page_size=25&page_number=1&term=' + encodeURIComponent(term);
       return api('search?' + queryStr).then(function (data) {
+        var before = foundItems.size;
         var count = addResults(data);
         var best = rankItems(Array.from(foundItems.values()));
-        console.log('[SEARCH PAGE]', 'term:', term, 'page: 1', 'returned:', count,
+        console.warn('[SEARCH PAGE]', 'term:', term, 'page:', 1, 'returned:', count,
+          'newUnique:', foundItems.size - before,
           'best:', best ? best.item.title : 'none',
           'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
           'score:', best ? best.score.toFixed(2) : 'n/a',
@@ -187,17 +189,24 @@ function searchCinemaBox(title, type, year) {
       })).then(function (pages) {
         // Merge in page order so equal-score tie-breaking remains deterministic.
         var counts = pages.map(function (data, index) {
+          var before = foundItems.size;
           var count = data ? addResults(data) : 0;
-          console.log('[SEARCH PAGE]', 'term:', term, 'page:', pageNumbers[index], 'returned:', count);
+          var bestOnPage = rankItems(Array.from(foundItems.values()));
+          console.warn('[SEARCH PAGE]', 'term:', term, 'page:', pageNumbers[index],
+            'returned:', count, 'newUnique:', foundItems.size - before,
+            'best:', bestOnPage ? bestOnPage.item.title : 'none',
+            'titleScore:', bestOnPage ? bestOnPage.titleScore.toFixed(2) : 'n/a',
+            'score:', bestOnPage ? bestOnPage.score.toFixed(2) : 'n/a',
+            'year:', bestOnPage ? (bestOnPage.resultYear || 'unknown') : 'n/a');
           return count;
         });
         var best = rankItems(Array.from(foundItems.values()));
         if (best && best.score >= 0.95) {
-          console.log('[SEARCH STOP]', 'reason: strong-score', 'score:', best.score.toFixed(2));
+          console.warn('[SEARCH STOP]', 'reason: strong-score', 'score:', best.score.toFixed(2));
           return;
         }
         if (counts.some(function (count) { return count < 25; })) {
-          console.log('[SEARCH STOP]', 'reason: last-page', 'returned:', counts);
+          console.warn('[SEARCH STOP]', 'reason: last-page', 'returned:', counts);
           return;
         }
         return fetchMorePages(term, pageNum + pageNumbers.length);
@@ -207,12 +216,12 @@ function searchCinemaBox(title, type, year) {
     return fetchFirstPage(title).then(function (firstCount) {
       var best = rankItems(Array.from(foundItems.values()));
       if (best && best.score >= 0.95) {
-        console.log('[SEARCH STOP]', 'reason: first-page-strong-match', 'title:', best.item.title,
+        console.warn('[SEARCH STOP]', 'reason: first-page-strong-match', 'title:', best.item.title,
           'titleScore:', best.titleScore.toFixed(2), 'score:', best.score.toFixed(2));
         return;
       }
 
-      console.log('[SEARCH FALLBACK]', 'reason:', best ? 'best-score-below-0.95' : 'no-results',
+      console.warn('[SEARCH FALLBACK]', 'reason:', best ? 'best-score-below-0.95' : 'no-results',
         'query:', title, 'year:', year || 'none',
         'best:', best ? best.item.title : 'none',
         'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
@@ -223,12 +232,12 @@ function searchCinemaBox(title, type, year) {
       return fallbackSearch.then(function (fallbackCount) {
         best = rankItems(Array.from(foundItems.values()));
         if (best && best.score >= 0.95) {
-          console.log('[SEARCH STOP]', 'reason: fallback-strong-match', 'title:', best.item.title,
+          console.warn('[SEARCH STOP]', 'reason: fallback-strong-match', 'title:', best.item.title,
             'titleScore:', best.titleScore.toFixed(2), 'score:', best.score.toFixed(2));
           return;
         }
 
-        console.log('[SEARCH PAGINATION]', 'reason: no-strong-match-after-first-pages',
+        console.warn('[SEARCH PAGINATION]', 'reason: no-strong-match-after-first-pages',
           'best:', best ? best.item.title : 'none',
           'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
           'score:', best ? best.score.toFixed(2) : 'n/a');
@@ -240,10 +249,10 @@ function searchCinemaBox(title, type, year) {
     }).then(function () {
       var best = rankItems(Array.from(foundItems.values()));
       if (best && best.score >= 0.50) {
-        console.log('[MATCH]', title, '=>', best.item.title, 'ID:', best.item.id, 'score:', best.score.toFixed(2));
+        console.warn('[MATCH]', title, '=>', best.item.title, 'ID:', best.item.id, 'score:', best.score.toFixed(2));
         return best.item;
       }
-      console.log('[NOT FOUND]', title, year, type);
+      console.warn('[NOT FOUND]', title, year, type);
       return null;
     });
   }, 600000);
