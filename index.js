@@ -109,6 +109,48 @@ function uniqueStreamVideos(videos) {
   });
 }
 
+function streamQualityRank(video) {
+  var quality = normalizeQuality(video && video.quality);
+  var match = quality.match(/^(\\d{3,4})\\s*p\\b/i);
+  return match ? Number(match[1]) : 0;
+}
+
+function streamHealthScore(video) {
+  var score = 0;
+  var status = String(
+    video && (video.availability || video.health || video.status) || ''
+  ).trim().toLowerCase();
+
+  if (/^(?:online|available|healthy|ok|working|active)$/.test(status)) score += 20;
+  else if (/^(?:offline|unavailable|dead|failed|broken|down)$/.test(status)) score -= 20;
+
+  if (video && typeof video.cached === 'boolean') score += video.cached ? 12 : -4;
+
+  var seeders = Number(video && video.seeders);
+  if (Number.isFinite(seeders) && seeders > 0) {
+    score += Math.min(10, Math.log2(seeders + 1) * 2);
+  }
+  return score;
+}
+
+function rankStreamVideos(videos) {
+  return (Array.isArray(videos) ? videos : []).map(function (video, index) {
+    return {
+      video: video,
+      index: index,
+      qualityRank: streamQualityRank(video),
+      healthScore: streamHealthScore(video)
+    };
+  }).sort(function (a, b) {
+    // Quality is the primary decision; health metadata only breaks same-quality ties.
+    if (b.qualityRank !== a.qualityRank) return b.qualityRank - a.qualityRank;
+    if (b.healthScore !== a.healthScore) return b.healthScore - a.healthScore;
+    return a.index - b.index;
+  }).map(function (entry) {
+    return entry.video;
+  });
+}
+
 function normalizeQuality(value) {
   if (value == null || value === '') return 'Video';
   var quality = String(value).trim();
@@ -877,11 +919,18 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
           'urlValid:', validUrl,
           'quality:', quality);
       });
-      uniqueStreamVideos(playerVideos).forEach(function (video) {
+      var validVideos = uniqueStreamVideos(playerVideos);
+      var rankedVideos = rankStreamVideos(validVideos);
+      rankedVideos.forEach(function (video) {
         var stream = buildStream(video, displayTitle);
         streams.push(stream);
         qualityCounts[stream.quality] = (qualityCounts[stream.quality] || 0) + 1;
       });
+      console.log('[STREAM RANKING]', JSON.stringify({
+        candidates: validVideos.length,
+        orderedQualities: streams.map(function (stream) { return stream.quality; }),
+        strategy: 'quality-first-health-tiebreak'
+      }));
       console.log('[STREAM QUALITY SUMMARY]', JSON.stringify(qualityCounts));
       var rawQualities = [];
       var seenQualities = new Set();
