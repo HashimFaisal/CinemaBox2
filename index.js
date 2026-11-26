@@ -184,6 +184,33 @@ function request(url, deadline) {
   });
 }
 
+function requestWithRetry(url, deadline, maxRetries) {
+  var retries = Number.isInteger(maxRetries) && maxRetries >= 0 ? maxRetries : 1;
+
+  function attempt(index) {
+    ensureBudget(deadline, 'retryable HTTP request');
+    return request(url, deadline).catch(function (error) {
+      var message = String(error && error.message || error);
+      var retryable = /HTTP (?:408|425|429|500|502|503|504)\b/.test(message) ||
+        /network|fetch failed|timeout|timed out|ECONN|ENOTFOUND|EAI_AGAIN/i.test(message);
+      if (!retryable || index >= retries) throw error;
+
+      var delay = 200 * (index + 1);
+      console.log('[HTTP RETRY]', 'attempt:', index + 2,
+        'maxAttempts:', retries + 1, 'delayMs:', delay,
+        'reason:', /HTTP \d+/.test(message) ? message.match(/HTTP \d+/)[0] : 'network');
+      return new Promise(function (resolve) {
+        setTimeout(resolve, delay);
+      }).then(function () {
+        ensureBudget(deadline, 'HTTP retry');
+        return attempt(index + 1);
+      });
+    });
+  }
+
+  return attempt(0);
+}
+
 function api(path, deadline) {
   return request(BASE + '/' + path, deadline);
 }
@@ -237,19 +264,19 @@ function getDetails(id, seasonId, deadline) {
   var key = 'details-' + id + '-' + (seasonId || 'default');
   return cached(key, function () {
     console.log('[DETAILS FETCH]', 'show:', id, 'seasonId:', seasonId || 'default');
-    return api('shows/shows/dynamic/' + id + suffix, deadline);
+    return requestWithRetry(BASE + '/shows/shows/dynamic/' + id + suffix, deadline, 1);
   }, DETAILS_CACHE_TTL_MS);
 }
 
 function getPlayer(episodeId, deadline) {
   return cached('player-' + episodeId, function () {
-    return api('shows/episodes/player/' + episodeId, deadline);
+    return requestWithRetry(BASE + '/shows/episodes/player/' + episodeId, deadline, 1);
   }, PLAYER_CACHE_TTL_MS);
 }
 
 function getExternalMeta(type, id, deadline) {
   return cached('external-' + type + '-' + id, function () {
-    return request(CINEMETA + '/meta/' + type + '/' + encodeURIComponent(id) + '.json', deadline).then(function (data) {
+    return requestWithRetry(CINEMETA + '/meta/' + type + '/' + encodeURIComponent(id) + '.json', deadline, 1).then(function (data) {
       if (!data.meta || !data.meta.name) throw new Error('No external metadata for ' + id);
       return data.meta;
     });
@@ -451,8 +478,8 @@ function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadlin
     titles.push(alternate);
   }
 
-  // Search localized and original titles together; one slow title must not
-  // block a valid match from the other query.
+  // Search localized and original titles concurrently. Once one valid result
+  // arrives, allow a short arbitration window for a more accurate candidate.
   var searches = titles.map(function (title, index) {
     console.log('[SEARCH PARALLEL]', 'query:', title, 'index:', index);
     return searchCinemaBox(title, type, year, deadline).then(function (item) {
@@ -462,16 +489,46 @@ function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadlin
     });
   });
 
-  // Return the first valid match instead of waiting for every title query.
-  // A slower alternate-title lookup must not delay a usable primary-title result.
   return new Promise(function (resolve, reject) {
     var settled = 0;
+    var candidates = [];
     var firstError = null;
     var completed = false;
+    var arbitrationTimer = null;
+    var arbitrationDelayMs = 120;
+
+    function candidateScore(result) {
+      var item = result.item;
+      var primaryScore = titleScore(primaryTitle, item.title);
+      var alternateScore = alternate ? titleScore(alternate, item.title) : 0;
+      var score = Math.max(primaryScore, alternateScore);
+      var itemYear = releaseYear(item.year);
+      if (year && itemYear && itemYear !== '1900') {
+        score += itemYear === String(year) ? 0.1 : -0.1;
+      }
+      return score;
+    }
+
+    function finishWithBest(reason) {
+      if (completed || !candidates.length) return;
+      completed = true;
+      if (arbitrationTimer) clearTimeout(arbitrationTimer);
+      candidates.sort(function (a, b) {
+        var scoreDifference = candidateScore(b) - candidateScore(a);
+        if (Math.abs(scoreDifference) > 0.000001) return scoreDifference;
+        // Prefer the primary/localized title when confidence is equivalent.
+        return a.index - b.index;
+      });
+      var best = candidates[0];
+      console.log('[SEARCH PARALLEL MATCH]', 'query:', best.title,
+        'title:', best.item.title, 'strategy:', reason,
+        'confidence:', candidateScore(best).toFixed(2),
+        'completedQueries:', settled, 'totalQueries:', searches.length);
+      resolve(best.item);
+    }
 
     function finishWithoutMatch() {
-      settled++;
-      if (settled !== searches.length || completed) return;
+      if (completed || settled !== searches.length || candidates.length) return;
       completed = true;
       if (firstError) reject(firstError);
       else resolve(null);
@@ -480,18 +537,26 @@ function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadlin
     searches.forEach(function (search) {
       search.then(function (result) {
         if (completed) return;
+        settled++;
         if (result.item) {
-          completed = true;
-          console.log('[SEARCH PARALLEL MATCH]', 'query:', result.title,
-            'title:', result.item.title, 'strategy:', 'first-valid-result',
-            'completedQueries:', settled + 1, 'totalQueries:', searches.length);
-          resolve(result.item);
+          candidates.push(result);
+          if (searches.length === 1) {
+            finishWithBest('single-query');
+          } else if (settled === searches.length) {
+            finishWithBest('all-queries-settled');
+          } else if (!arbitrationTimer) {
+            arbitrationTimer = setTimeout(function () {
+              finishWithBest('confidence-window');
+            }, arbitrationDelayMs);
+          }
           return;
         }
-        finishWithoutMatch();
-      }).catch(function (error) {
-        if (!firstError) firstError = error;
-        finishWithoutMatch();
+        if (result.error && !firstError) firstError = result.error;
+        if (candidates.length && settled === searches.length) {
+          finishWithBest('all-queries-settled');
+        } else {
+          finishWithoutMatch();
+        }
       });
     });
   });
@@ -831,7 +896,7 @@ function getTmdbMetadata(tmdbId, mediaType, deadline) {
     '&append_to_response=external_ids';
 
   return cached('tmdb-meta-' + kind + '-' + tmdbId, function () {
-    return request(url, deadline).then(function (data) {
+    return requestWithRetry(url, deadline, 1).then(function (data) {
       var imdbId = data.imdb_id || (data.external_ids && data.external_ids.imdb_id);
       var name = data.title || data.name;
       if (!imdbId || !name) throw new Error('TMDB metadata is incomplete for ' + tmdbId);
