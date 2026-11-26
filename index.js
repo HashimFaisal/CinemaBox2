@@ -362,9 +362,10 @@ function parseExternalId(id) {
 function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
   var seasonDetails = details;
   var rawCurrentSeason = details.post_info && details.post_info.season_number;
-  var parsedCurrentSeason = Number(rawCurrentSeason);
-  // Missing season metadata is unknown, not proof that the initial response is season 1.
-  var currentSeason = Number.isInteger(parsedCurrentSeason) && parsedCurrentSeason > 0
+  var parsedCurrentSeason = rawCurrentSeason == null || rawCurrentSeason === ''
+    ? NaN : Number(rawCurrentSeason);
+  // Season 0 is valid (specials); only absent or invalid metadata is unknown.
+  var currentSeason = Number.isInteger(parsedCurrentSeason) && parsedCurrentSeason >= 0
     ? parsedCurrentSeason : null;
   var seasonPromise = Promise.resolve(seasonDetails);
 
@@ -384,8 +385,11 @@ function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
 
     var seasonCard = null;
     for (var i = 0; i < seasonCards.length; i++) {
-      var match = String(seasonCards[i].title || '').match(/\d+/);
-      if (match && Number(match[0]) === seasonNumber) {
+      var seasonTitle = String(seasonCards[i].title || '').trim();
+      var match = seasonTitle.match(/\d+/);
+      var cardSeason = /^specials?$/i.test(seasonTitle)
+        ? 0 : (match ? Number(match[0]) : null);
+      if (cardSeason === seasonNumber) {
         seasonCard = seasonCards[i];
         break;
       }
@@ -402,8 +406,10 @@ function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
     seasonPromise = getDetails(showId, seasonCard.id, deadline).then(function (loaded) {
       console.log('[TIMING] season details:', Date.now() - seasonLoadStart,
         'ms', 'season:', seasonNumber, 'seasonId:', seasonCard.id);
-      var loadedSeason = Number(loaded && loaded.post_info && loaded.post_info.season_number);
-      if (!Number.isInteger(loadedSeason) || loadedSeason !== seasonNumber) {
+      var rawLoadedSeason = loaded && loaded.post_info && loaded.post_info.season_number;
+      var loadedSeason = rawLoadedSeason == null || rawLoadedSeason === ''
+        ? NaN : Number(rawLoadedSeason);
+      if (!Number.isInteger(loadedSeason) || loadedSeason < 0 || loadedSeason !== seasonNumber) {
         console.log('[SEASON LOAD MISMATCH]', 'requested:', seasonNumber,
           'loaded:', Number.isInteger(loadedSeason) ? loadedSeason : 'unknown');
         return null;
@@ -438,7 +444,8 @@ function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
         var numeric = Number(description);
         return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : null;
       }
-      var labelled = description.match(/\b(?:episode|ep|e)\s*0*(\d+)\b/i);
+      var labelled = description.match(/\b(?:episode|ep|e|special)\s*0*(\d+)\b/i) ||
+        description.match(/\bs\s*0*\d+\s*e\s*0*(\d+)\b/i);
       if (!labelled) return null;
       var labelledNumber = Number(labelled[1]);
       return Number.isSafeInteger(labelledNumber) && labelledNumber > 0 ? labelledNumber : null;
@@ -510,7 +517,7 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
 
   return metaPromise.then(function (meta) {
     displayTitle = String(meta.name || meta.original_name || external.imdbId);
-    if (type === 'series' && external.season && external.episode) {
+    if (type === 'series' && external.season != null && external.episode != null) {
       var seasonLabel = String(external.season).padStart(2, '0');
       var episodeLabel = String(external.episode).padStart(2, '0');
       displayTitle += ' S' + seasonLabel + 'E' + episodeLabel;
@@ -554,7 +561,7 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
         return episodeId;
       }
 
-      if (!external.season || !external.episode) return null;
+      if (external.season == null || external.episode == null) return null;
       return findEpisode(details, found.id, external.season, external.episode, deadline);
     });
   })
@@ -641,7 +648,7 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
     if (oldType === 'series') {
       var requestedSeason = Number(args.season);
       var requestedEpisode = Number(args.episode);
-      if (!Number.isInteger(requestedSeason) || requestedSeason < 1 ||
+      if (!Number.isInteger(requestedSeason) || requestedSeason < 0 ||
           !Number.isInteger(requestedEpisode) || requestedEpisode < 1) {
         console.log('[SKIP STREAMS]', 'reason: episode-not-selected',
           'season:', args.season, 'episode:', args.episode);
