@@ -341,3 +341,35 @@ test('skips unsupported providers before scheduling timeout timers', async () =>
   assert.equal(providerCalled, false);
   assert.equal(engine.getHealth()['movie-only'].attempts, 0);
 });
+
+
+test('fallback provider is skipped when a primary provider returns valid streams', async () => {
+  let fallbackCalls = 0;
+  const engine = createProviderEngine({ providers: [
+    { id: 'primary', getStreams: async () => [{ url: 'https://cdn.example/primary.mp4', quality: '1080p' }] },
+    { id: 'fallback', fallbackOnlyWhenEmpty: true, getStreams: async () => {
+      fallbackCalls += 1;
+      return [{ url: 'https://cdn.example/fallback.mp4', quality: '720p' }];
+    } }
+  ] });
+  const result = await engine.getStreams({});
+  assert.equal(fallbackCalls, 0);
+  assert.equal(result.providers[1].status, 'skipped-primary-success');
+  assert.equal(engine.getHealth().fallback.attempts, 0);
+  assert.deepEqual(result.streams.map(stream => stream.providerId), ['primary']);
+});
+
+test('fallback provider runs when all primary providers return no valid streams', async () => {
+  let fallbackCalls = 0;
+  const engine = createProviderEngine({ providers: [
+    { id: 'primary', getStreams: async () => [] },
+    { id: 'fallback', fallbackOnlyWhenEmpty: true, getStreams: async () => {
+      fallbackCalls += 1;
+      return [{ url: 'https://cdn.example/fallback.mp4', quality: '720p' }];
+    } }
+  ] });
+  const result = await engine.getStreams({});
+  assert.equal(fallbackCalls, 1);
+  assert.equal(result.providers[1].status, 'ok');
+  assert.deepEqual(result.streams.map(stream => stream.providerId), ['fallback']);
+});
