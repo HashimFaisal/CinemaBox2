@@ -452,7 +452,22 @@ function fetchStreams(type, id, suppliedMeta) {
     return getPlayer(episodeId).then(function (player) {
       console.log('[TIMING] player:', Date.now() - stageStart, 'ms');
       var streams = [];
-      (player.videos || []).forEach(function (video) {
+      var playerVideos = Array.isArray(player && player.videos) ? player.videos : [];
+      console.log('[PLAYER DIAGNOSTICS]', type, id,
+        'playerKeys:', Object.keys(player || {}),
+        'videosType:', Array.isArray(player && player.videos) ? 'array' : typeof (player && player.videos),
+        'videosCount:', playerVideos.length);
+      playerVideos.forEach(function (video, index) {
+        var videoUrl = video && video.url;
+        var validUrl = typeof videoUrl === 'string' &&
+          (videoUrl.indexOf('http://') === 0 || videoUrl.indexOf('https://') === 0);
+        console.log('[PLAYER VIDEO]', 'index:', index,
+          'keys:', Object.keys(video || {}),
+          'urlType:', typeof videoUrl,
+          'validHttpUrl:', validUrl,
+          'quality:', video && video.quality ? video.quality : 'unknown');
+      });
+      playerVideos.forEach(function (video) {
         if (video.url && (video.url.indexOf('http://') === 0 || video.url.indexOf('https://') === 0)) {
           var quality = video.quality || 'Video';
           streams.push({
