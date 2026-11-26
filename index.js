@@ -98,8 +98,27 @@ function normalizeQuality(value) {
   if (value == null || value === '') return 'Video';
   var quality = String(value).trim();
   if (!quality) return 'Video';
-  var match = quality.match(/^(\d{3,4})\s*p$/i);
-  if (match) return match[1] + 'p';
+
+  // Normalize common UHD labels into Nuvio's canonical 2160p quality.
+  // Preserve HDR/Dolby Vision suffixes instead of silently discarding them.
+  var suffix = '';
+  var match = quality.match(/^(?:4\s*k|uhd)(?:\s+(.+))?$/i);
+  if (match) {
+    suffix = match[1] ? ' ' + match[1].trim() : '';
+    return '2160p' + suffix;
+  }
+
+  match = quality.match(/^(?:3840|4096)\s*[x×]\s*2160(?:p)?(?:\s+(.+))?$/i);
+  if (match) {
+    suffix = match[1] ? ' ' + match[1].trim() : '';
+    return '2160p' + suffix;
+  }
+
+  match = quality.match(/^(\d{3,4})\s*p(?:\s+(.+))?$/i);
+  if (match) {
+    suffix = match[2] ? ' ' + match[2].trim() : '';
+    return match[1] + 'p' + suffix;
+  }
   return quality;
 }
 function diagnostic(stage, code, type, id, error) {
@@ -684,7 +703,7 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
         }
       });
       var has2160p = rawQualities.some(function (quality) {
-        return /^(?:2160p|4k|uhd)$/i.test(String(quality).trim());
+        return /^2160p(?:\\b|$)/i.test(String(quality).trim());
       });
       console.log('[CINEMABOX QUALITY AUDIT]', JSON.stringify({
         rawVideos: playerVideos.length,
