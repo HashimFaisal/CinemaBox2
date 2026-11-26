@@ -455,6 +455,19 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
     var oldType = rawType === 'tv' ? 'series' : rawType;
     var rawId = String(args.tmdbId || '').replace(/^imdb:/i, '');
 
+    // لا تنفذ أي طلب metadata لمسلسل قبل تحديد حلقة صالحة.
+    // Nuvio قد يرسل -1:-1 عند فتح صفحة المسلسل دون اختيار حلقة.
+    if (oldType === 'series') {
+      var requestedSeason = Number(args.season);
+      var requestedEpisode = Number(args.episode);
+      if (!Number.isInteger(requestedSeason) || requestedSeason < 1 ||
+          !Number.isInteger(requestedEpisode) || requestedEpisode < 1) {
+        console.log('[SKIP STREAMS]', 'reason: episode-not-selected',
+          'season:', args.season, 'episode:', args.episode);
+        return [];
+      }
+    }
+
     function run(imdbId, meta) {
       if (!imdbId) return [];
       var id = imdbId;
