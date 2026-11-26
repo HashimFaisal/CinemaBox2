@@ -1357,18 +1357,13 @@ function createInternetArchiveProvider(options) {
       queryCount: variants.length,
       queries: querySummaries,
       reportedTotal: querySummaries.reduce(function (sum, item) { return sum + (Number(item.reportedTotal) || 0); }, 0),
-      rawResults: docs.length,
-      sampleDocs: docs.slice(0, 5).map(function (entry) {
-        return {
-          identifier: String(entry.doc.identifier),
-          title: String(entry.doc.title || ''),
-          year: String(entry.doc.year || ''),
-
-        };
-      }),
+      rawResults: rawResultCount,
+      searchShape: firstSearchShape,
+      sampleDocs: rawSampleDocs,
       candidates: candidates.length,
       filtered: filtered
     });
+
     const selected = candidates.slice(0, maxCandidates).map(function (entry) { return entry.doc; });
     selected.rawResults = rawResultCount;
     return selected;
@@ -1408,6 +1403,7 @@ function createInternetArchiveProvider(options) {
         continue;
       }
       const metadata = record && record.metadata || {};
+      trace('metadata-inspected', { identifier: String(doc.identifier), metadataTitle: String(metadata.title || doc.title || ''), licensePresent: Boolean(metadata.licenseurl || metadata.license_url || metadata.rights), year: yearOf(metadata.year || metadata.date || doc.year) });
       if (!isPermittedLicense(metadata)) { rejected.licenseNotPermitted += 1; trace('candidate-rejected', { identifier: String(doc.identifier), reason: 'license-not-permitted' }); continue; }
       const metadataTitle = metadata.title || doc.title || '';
       const metadataScore = variants.reduce(function (best, variant) {
