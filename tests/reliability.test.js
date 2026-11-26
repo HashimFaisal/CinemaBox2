@@ -17,7 +17,7 @@ function loadInternals(fetchImpl, logger) {
     console: logger || { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, getPlayer };',
+    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, getPlayer, getStreamsForNuvio };',
     sandbox,
     { filename: 'index.js' }
   );
@@ -656,4 +656,78 @@ test('malformed player payload is diagnosed separately from an empty player resu
   const diagnostic = diagnostics.find(entry => entry[0] === '[CINEMABOX DIAGNOSTIC]');
   assert.ok(diagnostic);
   assert.equal(JSON.parse(diagnostic[1]).code, 'PLAYER_PAYLOAD_INVALID');
+});
+
+
+test('public Nuvio entry point resolves TMDB movie metadata and returns three ordered qualities', async () => {
+  const requests = [];
+  const api = loadInternals(url => {
+    requests.push(url);
+    if (url.startsWith('https://api.themoviedb.org/3/movie/603?')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          title: 'The Matrix',
+          original_title: 'The Matrix',
+          release_date: '1999-03-31',
+          imdb_id: 'tt0133093'
+        }))
+      });
+    }
+    if (url.includes('/search?')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 11861, title: 'The Matrix', type: 'MOVIE', year: '1999' }]
+        }))
+      });
+    }
+    if (url.includes('/shows/shows/dynamic/11861')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          post_info: { episode_id: 700603 }
+        }))
+      });
+    }
+    if (url.includes('/shows/episodes/player/700603')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          videos: [
+            { url: 'https://cdn.example/matrix-1080.mp4?sig=1', quality: '1080p' },
+            { url: 'https://cdn.example/matrix-720.mp4?sig=2', quality: '720p' },
+            { url: 'https://cdn.example/matrix-480.mp4?sig=3', quality: '480p' }
+          ]
+        }))
+      });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  });
+
+  const streams = await api.getStreamsForNuvio({ tmdbId: '603', mediaType: 'movie' });
+  assert.equal(streams.length, 3);
+  assert.deepEqual(Array.from(streams, stream => stream.quality), ['1080p', '720p', '480p']);
+  assert.ok(requests.some(url => url.startsWith('https://api.themoviedb.org/3/movie/603?')));
+  assert.ok(streams.every(stream => stream.title.includes('The Matrix')));
+});
+
+test('TMDB authorization failures are classified and API keys stay redacted', async () => {
+  const diagnostics = [];
+  const logger = { log() {}, error(...args) { diagnostics.push(args); } };
+  const api = loadInternals(() => Promise.resolve({
+    ok: false,
+    status: 401,
+    text: () => Promise.resolve('Unauthorized api_key=test-secret-key')
+  }), logger);
+
+  const streams = await api.getStreamsForNuvio({ tmdbId: '603', mediaType: 'movie' });
+  assert.deepEqual(Array.from(streams), []);
+  const entry = diagnostics.find(item => item[0] === '[CINEMABOX DIAGNOSTIC]');
+  assert.ok(entry);
+  const payload = JSON.parse(entry[1]);
+  assert.equal(payload.stage, 'tmdb_metadata');
+  assert.equal(payload.code, 'UPSTREAM_AUTH_ERROR');
+  assert.ok(payload.message.includes('[REDACTED]'));
+  assert.doesNotMatch(payload.message, /test-secret-key/);
 });
