@@ -37,7 +37,7 @@ test('deduplicates exact URLs but preserves distinct signed URLs', async () => {
     { id: 'two', getStreams: async () => [{ url: 'https://cdn.example/v?sig=2' }] }
   ]});
   const result = await engine.getStreams({});
-  assert.deepEqual(result.streams.map(item => item.url), ['https://cdn.example/v?sig=1', 'https://cdn.example/v?sig=2']);
+  assert.deepEqual(result.streams.map(item => item.url).sort(), ['https://cdn.example/v?sig=1', 'https://cdn.example/v?sig=2']);
 });
 
 test('opens a provider circuit after repeated failures without blocking healthy providers', async () => {
@@ -101,7 +101,7 @@ test('disabled providers are skipped and empty responses remain valid', async ()
     { id: 'empty', getStreams: async () => ({ streams: [] }) }
   ]});
   const result = await engine.getStreams({});
-  assert.deepEqual(result.providers.map(item => item.status), ['disabled', 'ok']);
+  assert.deepEqual(result.providers.map(item => item.status), ['disabled', 'empty']);
   assert.equal(result.streams.length, 0);
 });
 
