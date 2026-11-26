@@ -608,6 +608,45 @@ test('stream URL validation uses URL parsing and rejects credentials or invalid 
   invalid.forEach(url => assert.equal(api.validateStreamUrl(url), false, url));
 });
 
+test('stream ranking puts higher quality first while preserving original URLs', () => {
+  const api = loadInternals(() => {});
+  const input = [
+    { url: 'https://cdn.example/480.mp4', quality: '480p' },
+    { url: 'https://cdn.example/2160.mp4', quality: '4K HDR' },
+    { url: 'https://cdn.example/1080.mp4', quality: '1080p' },
+    { url: 'https://cdn.example/720.mp4', quality: '720p' }
+  ];
+  const ranked = api.rankStreamVideos(input);
+  assert.deepEqual(
+    Array.from(ranked, video => video.url),
+    [
+      'https://cdn.example/2160.mp4',
+      'https://cdn.example/1080.mp4',
+      'https://cdn.example/720.mp4',
+      'https://cdn.example/480.mp4'
+    ]
+  );
+});
+
+test('stream health metadata breaks ties only within the same quality', () => {
+  const api = loadInternals(() => {});
+  const input = [
+    { url: 'https://cdn.example/1080-a.mp4', quality: '1080p', status: 'offline', cached: false },
+    { url: 'https://cdn.example/1080-b.mp4', quality: '1080p', status: 'online', cached: true, seeders: 12 },
+    { url: 'https://cdn.example/2160.mp4', quality: '2160p', status: 'offline' }
+  ];
+  const ranked = api.rankStreamVideos(input);
+  assert.deepEqual(
+    Array.from(ranked, video => video.url),
+    [
+      'https://cdn.example/2160.mp4',
+      'https://cdn.example/1080-b.mp4',
+      'https://cdn.example/1080-a.mp4'
+    ],
+    'health signals must not demote a higher quality tier'
+  );
+});
+
 test('three distinct provider qualities remain three independent Nuvio streams', () => {
   const api = loadInternals(() => {});
   const videos = [
