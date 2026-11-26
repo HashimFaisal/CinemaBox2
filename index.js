@@ -666,6 +666,10 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
       console.log('[TIMING] player:', Date.now() - stageStart, 'ms');
       var streams = [];
       if (!player || !Array.isArray(player.videos)) {
+        console.error('[CINEMABOX QUALITY AUDIT]', JSON.stringify({
+          stage: 'player_response', status: 'invalid', rawVideos: null,
+          validUniqueStreams: 0, qualities: [], has2160p: null
+        }));
         diagnostic('player', 'PLAYER_PAYLOAD_INVALID', type, id,
           new Error('Expected videos array; received ' + (player && typeof player.videos)));
         return { streams: [] };
@@ -703,9 +707,11 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
         }
       });
       var has2160p = rawQualities.some(function (quality) {
-        return /^2160p(?:\\b|$)/i.test(String(quality).trim());
+        return /^2160p(?:\b|$)/i.test(String(quality).trim());
       });
-      console.log('[CINEMABOX QUALITY AUDIT]', JSON.stringify({
+      console.error('[CINEMABOX QUALITY AUDIT]', JSON.stringify({
+        stage: 'player_response',
+        status: 'ok',
         rawVideos: playerVideos.length,
         validUniqueStreams: streams.length,
         qualities: rawQualities,
@@ -729,6 +735,15 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
       (/HTTP (4\d\d)\b/.test(message) ? 'UPSTREAM_CLIENT_ERROR' :
       (/network|fetch failed|timeout|timed out|ECONN|ENOTFOUND|EAI_AGAIN/i.test(message) ? 'NETWORK_ERROR' :
       (/Invalid JSON/i.test(message) ? 'INVALID_UPSTREAM_JSON' : 'UNEXPECTED_ERROR'))))));
+    console.error('[CINEMABOX QUALITY AUDIT]', JSON.stringify({
+      stage: failureStage,
+      status: 'error',
+      errorCode: code,
+      rawVideos: null,
+      validUniqueStreams: 0,
+      qualities: [],
+      has2160p: null
+    }));
     diagnostic(failureStage, code, type, id, error);
     return { streams: [] };
   });
@@ -771,6 +786,14 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
     var rawType = String(args.mediaType || 'movie').toLowerCase();
     var oldType = rawType === 'tv' ? 'series' : rawType;
     var rawId = String(args.tmdbId || '').replace(/^imdb:/i, '');
+    // Error-level marker makes plugin invocation distinguishable from player-only logs.
+    console.error('[CINEMABOX RUNTIME]', JSON.stringify({
+      stage: 'start',
+      mediaType: rawType,
+      id: rawId || 'unknown',
+      season: args.season == null ? null : Number(args.season),
+      episode: args.episode == null ? null : Number(args.episode)
+    }));
 
     // لا تنفذ أي طلب metadata لمسلسل قبل تحديد حلقة صالحة.
     // Nuvio قد يرسل -1:-1 عند فتح صفحة المسلسل دون اختيار حلقة.
