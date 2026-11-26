@@ -352,13 +352,18 @@ function parseExternalId(id) {
 
 function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
   var seasonDetails = details;
-  var currentSeason = Number((details.post_info && details.post_info.season_number) || 1);
+  var rawCurrentSeason = details.post_info && details.post_info.season_number;
+  var parsedCurrentSeason = Number(rawCurrentSeason);
+  // Missing season metadata is unknown, not proof that the initial response is season 1.
+  var currentSeason = Number.isInteger(parsedCurrentSeason) && parsedCurrentSeason > 0
+    ? parsedCurrentSeason : null;
   var seasonPromise = Promise.resolve(seasonDetails);
 
   console.log('[SEASON RESOLVE]', 'requested:', seasonNumber,
-    'current:', currentSeason, 'requiresSeasonFetch:', seasonNumber !== currentSeason);
+    'current:', currentSeason == null ? 'unknown' : currentSeason,
+    'requiresSeasonFetch:', currentSeason !== seasonNumber);
 
-  if (seasonNumber !== currentSeason) {
+  if (currentSeason !== seasonNumber) {
     var seasonCards = [];
     (details.sections || []).forEach(function (section) {
       (section.data || []).forEach(function (item) {
@@ -378,7 +383,8 @@ function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
     }
 
     if (!seasonCard) {
-      console.log('[SEASON NOT AVAILABLE]', 'requested:', seasonNumber);
+      console.log('[SEASON NOT AVAILABLE]', 'requested:', seasonNumber,
+        'reason:', currentSeason == null ? 'season-metadata-missing' : 'season-card-missing');
       return Promise.resolve(null);
     }
 
@@ -387,9 +393,10 @@ function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
     seasonPromise = getDetails(showId, seasonCard.id, deadline).then(function (loaded) {
       console.log('[TIMING] season details:', Date.now() - seasonLoadStart,
         'ms', 'season:', seasonNumber, 'seasonId:', seasonCard.id);
-      var loadedSeason = Number((loaded.post_info && loaded.post_info.season_number) || 0);
-      if (loadedSeason !== seasonNumber) {
-        console.log('[SEASON LOAD MISMATCH]', 'requested:', seasonNumber, 'loaded:', loadedSeason);
+      var loadedSeason = Number(loaded && loaded.post_info && loaded.post_info.season_number);
+      if (!Number.isInteger(loadedSeason) || loadedSeason !== seasonNumber) {
+        console.log('[SEASON LOAD MISMATCH]', 'requested:', seasonNumber,
+          'loaded:', Number.isInteger(loadedSeason) ? loadedSeason : 'unknown');
         return null;
       }
       return loaded;
@@ -416,15 +423,31 @@ function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
       });
     }
 
-    for (var idx = 0; idx < episodes.length; idx++) {
-      var parsed = Number(episodes[idx].description);
-      var number = (Number.isFinite(parsed) && parsed > 0) ? parsed : idx + 1;
-      if (number === episodeNumber) return episodes[idx].id;
+    function explicitEpisodeNumber(item) {
+      var description = String(item.description == null ? '' : item.description).trim();
+      if (/^\d+$/.test(description)) {
+        var numeric = Number(description);
+        return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : null;
+      }
+      var labelled = description.match(/\b(?:episode|ep|e)\s*0*(\d+)\b/i);
+      if (!labelled) return null;
+      var labelledNumber = Number(labelled[1]);
+      return Number.isSafeInteger(labelledNumber) && labelledNumber > 0 ? labelledNumber : null;
+    }
+
+    var numbered = episodes.map(function (item) {
+      return { item: item, number: explicitEpisodeNumber(item) };
+    });
+    var hasExplicitNumbers = numbered.some(function (entry) { return entry.number != null; });
+
+    for (var idx = 0; idx < numbered.length; idx++) {
+      // Positional fallback is safe only when the entire list has no explicit numbering.
+      var number = hasExplicitNumbers ? numbered[idx].number : idx + 1;
+      if (number === episodeNumber) return numbered[idx].item.id;
     }
     return null;
   });
 }
-
 function resolveImdbId(id, mediaType, deadline) {
   var value = String(id || '').replace(/^imdb:/i, '');
   if (/^tt\d+$/i.test(value)) return Promise.resolve(value);
