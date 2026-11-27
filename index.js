@@ -1498,25 +1498,19 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
       });
       var subtitlePreferenceCounts = { clean: 0, unknown: 0, hardcoded: 0 };
       var uniqueVideos = uniqueStreamVideos(playerVideos);
-      // Probe up to three sources in parallel, but cap the total wait to 1.8 seconds.
-      // A slow or non-cooperative host must not hold up the source list.
-      var probeVideos = uniqueVideos.slice(0, 3);
-      var probeDeadline = Math.min(deadline, Date.now() + VIDEO_PROBE_TIMEOUT_MS);
-      return Promise.all(probeVideos.map(function (video) {
-        return probeVideoSource(video.url, probeDeadline);
-      })).then(function (sourceInfos) {
-        uniqueVideos.forEach(function (video, index) {
-          var sourceInfo = index < sourceInfos.length ? sourceInfos[index] : null;
-          var stream = buildStream(video, displayTitle, sourceInfo);
-          if (!stream) return;
-          var preferenceRank = subtitlePreferenceRank(video);
-          Object.defineProperty(stream, '_subtitlePreferenceRank', {
-            value: preferenceRank, enumerable: false, configurable: true
-          });
-          subtitlePreferenceCounts[preferenceRank === 0 ? 'clean' : (preferenceRank === 2 ? 'hardcoded' : 'unknown')] += 1;
-          streams.push(stream);
-          qualityCounts[stream.quality] = (qualityCounts[stream.quality] || 0) + 1;
+      // Return playable source URLs immediately. Do not issue HEAD/Range requests
+      // before Nuvio receives the source list or starts playback.
+      uniqueVideos.forEach(function (video) {
+        var stream = buildStream(video, displayTitle, null);
+        if (!stream) return;
+        var preferenceRank = subtitlePreferenceRank(video);
+        Object.defineProperty(stream, '_subtitlePreferenceRank', {
+          value: preferenceRank, enumerable: false, configurable: true
         });
+        subtitlePreferenceCounts[preferenceRank === 0 ? 'clean' : (preferenceRank === 2 ? 'hardcoded' : 'unknown')] += 1;
+        streams.push(stream);
+        qualityCounts[stream.quality] = (qualityCounts[stream.quality] || 0) + 1;
+      });
       // Subtitle cleanliness takes precedence; resolution remains the tie-breaker.
       // This does not inspect video pixels and never guesses when metadata is absent.
       streams.sort(function (a, b) {
@@ -1562,7 +1556,6 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
         'rawVideos:', playerVideos.length, 'uniqueValid:', streams.length,
         'total:', Date.now() - timingStart, 'ms');
       return { streams: streams };
-      });
     });
   })
   .catch(function (error) {
