@@ -1714,6 +1714,13 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
 
     var suppliedMeta = args.meta && typeof args.meta === 'object' &&
       (args.meta.name || args.meta.title || args.meta.original_name) ? args.meta : null;
+    if (!suppliedMeta && (args.title || args.name || args.originalTitle || args.original_name)) {
+      suppliedMeta = {
+        name: args.title || args.name || args.original_name || args.originalTitle,
+        original_name: args.originalTitle || args.original_name || args.title || args.name,
+        year: args.year || args.releaseDate || args.release_date || ''
+      };
+    }
     if (/^tt\d+$/i.test(rawId)) {
       if (suppliedMeta) return run(rawId, suppliedMeta);
       return getExternalMeta(oldType, rawId, deadline).then(function (meta) {
