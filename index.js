@@ -255,7 +255,37 @@ var createProviderEngine = (function () {
 })();
 
 const BASE = 'https://cinema.albox.co/api/v4';
+const FALLBACK_BASES = ['https://pucinema.albox.co/api/v4'];
 const CINEMETA = 'https://v3-cinemeta.strem.io';
+var runtimeRequestHeaders = Object.create(null);
+
+function configureRequestHeaders(args) {
+  runtimeRequestHeaders = Object.create(null);
+  var source = args && args.headers && typeof args.headers === 'object' ? args.headers : {};
+  var aliases = {
+    'Device-Id': ['Device-Id', 'deviceId', 'device_id'],
+    'Device-Model': ['Device-Model', 'deviceModel', 'device_model'],
+    'Device-OS-Version': ['Device-OS-Version', 'deviceOsVersion', 'device_os_version'],
+    'App-Version': ['App-Version', 'appVersion', 'app_version'],
+    'JWT': ['JWT', 'jwt'],
+    'Authorization': ['Authorization', 'authorization']
+  };
+  Object.keys(aliases).forEach(function (headerName) {
+    var keys = aliases[headerName];
+    var value;
+    for (var i = 0; i < keys.length; i++) {
+      if (source[keys[i]] != null && source[keys[i]] !== '') { value = source[keys[i]]; break; }
+      if (args && args[keys[i]] != null && args[keys[i]] !== '') { value = args[keys[i]]; break; }
+    }
+    if (value != null && String(value).trim()) runtimeRequestHeaders[headerName] = String(value).trim();
+  });
+}
+
+function shouldTryFallbackHost(error) {
+  var message = String(error && error.message || error);
+  return /HTTP (?:408|425|429|500|502|503|504)\\b/.test(message) ||
+    /network|fetch failed|timeout|timed out|ECONN|ENOTFOUND|EAI_AGAIN/i.test(message);
+}
 
 function redactSensitive(value) {
   var text = String(value == null ? '' : value)
@@ -415,13 +445,16 @@ function request(url, deadline) {
       }, remainingMs);
     });
   }
-  var options = { headers: {
+  var requestOrigin = 'https://cinema.albox.co';
+  try { requestOrigin = new URL(url).origin; } catch (_) {}
+  var headers = Object.assign({
     Accept: 'application/json',
     'User-Agent': 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36',
-    'Referer': 'https://cinema.albox.co/',
-    'Origin': 'https://cinema.albox.co',
+    'Referer': requestOrigin + '/',
+    'Origin': requestOrigin,
     'Accept-Language': 'en-US,en;q=0.9'
-  }};
+  }, runtimeRequestHeaders);
+  var options = { headers: headers };
   if (controller) options.signal = controller.signal;
   var work = Promise.resolve().then(function () { return fetch(url, options); }).then(function (response) {
     return response.text().then(function (body) {
@@ -469,7 +502,23 @@ function requestWithRetry(url, deadline, maxRetries) {
 }
 
 function api(path, deadline) {
-  return request(BASE + '/' + path, deadline);
+  var primaryUrl = BASE + '/' + path;
+  return requestWithRetry(primaryUrl, deadline, 1).catch(function (primaryError) {
+    if (!shouldTryFallbackHost(primaryError)) throw primaryError;
+    var fallbackIndex = 0;
+    function tryNext() {
+      if (fallbackIndex >= FALLBACK_BASES.length) throw primaryError;
+      var fallbackUrl = FALLBACK_BASES[fallbackIndex++] + '/' + path;
+      console.log('[API HOST FALLBACK]', 'host:', fallbackUrl.split('/')[2],
+        'reason:', /HTTP \\d+/.test(String(primaryError.message || primaryError))
+          ? String(primaryError.message).match(/HTTP \\d+/)[0] : 'network');
+      return requestWithRetry(fallbackUrl, deadline, 0).catch(function (fallbackError) {
+        if (shouldTryFallbackHost(fallbackError)) return tryNext();
+        throw fallbackError;
+      });
+    }
+    return tryNext();
+  });
 }
 
 function normalizeType(value) {
@@ -521,14 +570,61 @@ function getDetails(id, seasonId, deadline) {
   var key = 'details-' + id + '-' + (seasonId || 'default');
   return cached(key, function () {
     console.log('[DETAILS FETCH]', 'show:', id, 'seasonId:', seasonId || 'default');
-    return requestWithRetry(BASE + '/shows/shows/dynamic/' + id + suffix, deadline, 1);
+    return api('shows/shows/dynamic/' + encodeURIComponent(id) + suffix, deadline);
+  }, DETAILS_CACHE_TTL_MS);
+}
+
+function getSeasonPlayer(seasonId, deadline) {
+  return cached('season-player-' + seasonId, function () {
+    console.log('[SEASON PLAYER FETCH]', 'seasonId:', seasonId);
+    return api('shows/seasons/player/' + encodeURIComponent(seasonId), deadline);
   }, DETAILS_CACHE_TTL_MS);
 }
 
 function getPlayer(episodeId, deadline) {
   return cached('player-' + episodeId, function () {
-    return requestWithRetry(BASE + '/shows/episodes/player/' + episodeId, deadline, 1);
+    return api('shows/episodes/player/' + encodeURIComponent(episodeId), deadline);
   }, PLAYER_CACHE_TTL_MS);
+}
+
+function normalizeSeasonPlayerPayload(payload) {
+  var candidates = [];
+  if (Array.isArray(payload)) candidates.push(payload);
+  if (payload && Array.isArray(payload.episodes)) candidates.push(payload.episodes);
+  if (payload && Array.isArray(payload.data)) candidates.push(payload.data);
+  if (payload && payload.data && Array.isArray(payload.data.episodes)) candidates.push(payload.data.episodes);
+  if (payload && payload.result && Array.isArray(payload.result.episodes)) candidates.push(payload.result.episodes);
+  if (payload && Array.isArray(payload.results)) candidates.push(payload.results);
+  if (payload && Array.isArray(payload.items)) candidates.push(payload.items);
+  if (payload && Array.isArray(payload.sections)) {
+    payload.sections.forEach(function (section) {
+      if (section && Array.isArray(section.data)) candidates.push(section.data);
+    });
+  }
+  var episodes = [];
+  var seen = Object.create(null);
+  candidates.forEach(function (items) {
+    items.forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      var id = item.id || item.episode_id;
+      if (id == null || id === '') return;
+      var key = String(id);
+      if (seen[key]) return;
+      seen[key] = true;
+      var normalized = Object.assign({}, item, {
+        id: id,
+        card_type: 'episode',
+        description: item.episode_number != null ? String(item.episode_number) :
+          (item.episodeNumber != null ? String(item.episodeNumber) : item.description)
+      });
+      episodes.push(normalized);
+    });
+  });
+  if (!episodes.length) return null;
+  return {
+    post_info: payload && payload.post_info ? payload.post_info : {},
+    sections: [{ section_type: 'episodes', data: episodes }]
+  };
 }
 
 function getExternalMeta(type, id, deadline) {
@@ -845,6 +941,62 @@ function parseExternalId(id) {
 }
 
 function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
+  var postInfo = details && details.post_info || {};
+  var seasonId = null;
+  var currentSeasonValue = postInfo.season_number;
+  var currentSeason = currentSeasonValue == null || currentSeasonValue === '' ? NaN : Number(currentSeasonValue);
+  if (Number.isInteger(currentSeason) && currentSeason === seasonNumber && postInfo.current_season_id) {
+    seasonId = postInfo.current_season_id;
+  }
+  if (!seasonId && Array.isArray(details && details.sections)) {
+    details.sections.some(function (section) {
+      return (section.data || []).some(function (item) {
+        if (String(item.card_type || '').toLowerCase() !== 'seasonposter' || !item.id) return false;
+        var label = String(item.title || '').trim();
+        var match = label.match(/\\d+/);
+        var number = /^specials?$/i.test(label) ? 0 : (match ? Number(match[0]) : null);
+        if (number === seasonNumber) { seasonId = item.id; return true; }
+        return false;
+      });
+    });
+  }
+  if (seasonId) {
+    ensureBudget(deadline, 'season player');
+    return getSeasonPlayer(seasonId, deadline).then(function (payload) {
+      var normalized = normalizeSeasonPlayerPayload(payload);
+      if (normalized) {
+        console.log('[SEASON PLAYER]', 'seasonId:', seasonId,
+          'episodes:', normalized.sections[0].data.length);
+        return findEpisodeFromSeasonDetails(normalized, seasonNumber, episodeNumber);
+      }
+      console.log('[SEASON PLAYER FALLBACK]', 'reason: no-recognized-episodes', 'seasonId:', seasonId);
+      return null;
+    }).catch(function (error) {
+      console.log('[SEASON PLAYER FALLBACK]', 'seasonId:', seasonId,
+        'reason:', redactSensitive(error && error.message || error));
+      return null;
+    }).then(function (episodeId) {
+      if (episodeId) return episodeId;
+      return findEpisodeFromLegacyDetails(details, showId, seasonNumber, episodeNumber, deadline);
+    });
+  }
+  return findEpisodeFromLegacyDetails(details, showId, seasonNumber, episodeNumber, deadline);
+}
+
+function findEpisodeFromSeasonDetails(sd, seasonNumber, episodeNumber) {
+  var episodes = sd && sd.sections && sd.sections[0] && sd.sections[0].data || [];
+  for (var i = 0; i < episodes.length; i++) {
+    var item = episodes[i];
+    var number = Number(item.episode_number != null ? item.episode_number :
+      (item.episodeNumber != null ? item.episodeNumber : item.description));
+    var itemSeason = item.seasonNumber != null ? Number(item.seasonNumber) :
+      (item.season_number != null ? Number(item.season_number) : seasonNumber);
+    if (itemSeason === seasonNumber && number === episodeNumber) return item.id;
+  }
+  return null;
+}
+
+function findEpisodeFromLegacyDetails(details, showId, seasonNumber, episodeNumber, deadline) {
   var seasonDetails = details;
   var rawCurrentSeason = details.post_info && details.post_info.season_number;
   var parsedCurrentSeason = rawCurrentSeason == null || rawCurrentSeason === ''
@@ -977,12 +1129,13 @@ function buildStream(video, displayTitle) {
   if (!video || !validateStreamUrl(video.url)) return null;
   var quality = normalizeQuality(video.quality);
   var streamLabel = 'CinemaBox (' + displayTitle + ') ' + quality;
-  return {
+  var output = {
     name: streamLabel,
     title: streamLabel,
     url: video.url,
     quality: quality
   };
+  return output;
 }
 
 function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
@@ -1082,7 +1235,15 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
       console.log('[FETCH TRACE] player-finish', 'elapsedMs:', Date.now() - stageStart);
       console.log('[TIMING] player:', Date.now() - stageStart, 'ms');
       var streams = [];
-      if (!player || !Array.isArray(player.videos)) {
+      var playerVideos = player && Array.isArray(player.videos) ? player.videos : [];
+      if (!playerVideos.length && player && player.file) {
+        var fileItems = Array.isArray(player.file) ? player.file : [player.file];
+        playerVideos = fileItems.map(function (file) {
+          if (typeof file === 'string') return { url: file, quality: player.quality };
+          return Object.assign({}, file, { url: file.url || file.file || file.src });
+        });
+      }
+      if (!player || !playerVideos.length) {
         console.error('[CINEMABOX QUALITY AUDIT]', JSON.stringify({
           stage: 'player_response', status: 'invalid', rawVideos: null,
           validUniqueStreams: 0, qualities: [], has2160p: null
@@ -1091,9 +1252,12 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
           new Error('Expected videos array; received ' + (player && typeof player.videos)));
         return { streams: [] };
       }
-      var playerVideos = player.videos;
       if (playerVideos.length === 0) {
         diagnostic('player', 'PLAYER_EMPTY', type, id);
+      }
+      var subtitleTracks = Array.isArray(player.subtitles) ? player.subtitles : [];
+      if (player.parental_access != null) {
+        console.log('[PLAYER ACCESS]', 'parentalAccessFieldPresent:', true);
       }
       console.log('[PLAYER DIAGNOSTICS]', type, id,
         'playerKeys:', Object.keys(player || {}),
@@ -1114,6 +1278,15 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
         streams.push(stream);
         qualityCounts[stream.quality] = (qualityCounts[stream.quality] || 0) + 1;
       });
+      if (subtitleTracks.length) {
+        var safeSubtitles = subtitleTracks.filter(function (track) {
+          var url = typeof track === 'string' ? track : track && (track.url || track.file);
+          return validateStreamUrl(url);
+        });
+        if (safeSubtitles.length) streams.forEach(function (stream) {
+          stream.subtitles = safeSubtitles.slice();
+        });
+      }
       console.log('[STREAM QUALITY SUMMARY]', JSON.stringify(qualityCounts));
       var rawQualities = [];
       var seenQualities = new Set();
@@ -1630,6 +1803,7 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
       ? input
       : { tmdbId: input, mediaType: mediaType, season: season, episode: episode };
 
+    configureRequestHeaders(args);
     var rawType = String(args.mediaType || 'movie').toLowerCase();
     var oldType = rawType === 'tv' ? 'series' : rawType;
     var rawId = String(args.tmdbId || '').replace(/^imdb:/i, '');
@@ -1676,7 +1850,8 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
             name: stream.name,
             title: stream.title,
             url: stream.url,
-            quality: stream.quality
+            quality: stream.quality,
+            subtitles: stream.subtitles
           };
         });
         var providerHealth = cinemaBoxProviderEngine.getHealth();
