@@ -820,7 +820,6 @@ function parseExternalId(id) {
   if (match) {
     return {
       imdbId: match[1],
-      tmdbId: null,
       season: match[2] ? Number(match[2]) : null,
       episode: match[3] ? Number(match[3]) : null
     };
