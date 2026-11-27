@@ -94,16 +94,23 @@ function createProviderEngine(options) {
     let timer;
     let timedOut = false;
     try {
-      const work = Promise.resolve().then(() => provider.getStreams(Object.assign({}, context, {
-        providerId: provider.id, deadline: deadline
-      })));
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      const providerContext = Object.assign({}, context, {
+        providerId: provider.id, deadline: deadline,
+        signal: controller ? controller.signal : undefined
+      });
+      const work = Promise.resolve().then(() => provider.getStreams(providerContext));
       // Embedded runtimes may retain completed timeout handles after clearTimeout.
       let result;
       if (provider.skipTimeoutTimer === true) {
         result = await work;
       } else {
         const timeout = new Promise((_, reject) => {
-          timer = schedule(() => { timedOut = true; reject(new Error('PROVIDER_TIMEOUT')); }, Math.max(1, deadline - now()));
+          timer = schedule(() => {
+            timedOut = true;
+            if (controller) controller.abort();
+            reject(new Error('PROVIDER_TIMEOUT'));
+          }, Math.max(1, deadline - now()));
         });
         result = await Promise.race([work, timeout]);
         cancel(timer);
