@@ -1352,15 +1352,15 @@ test('bundled engine runs fallback providers only when primary results are empty
   assert.equal(result.streams[0].providerId, 'primary');
 });
 
-test('official CinemaBox manifest is the single maintained add-on identity', () => {
+test('beta manifest is the single maintained experimental add-on identity', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   const manifestPath = path.join(__dirname, '..', 'manifest.json');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   const experimentalManifestPath = path.join(__dirname, '..', 'manifest.next-test.json');
   assert.equal(packageJson.version, manifest.version);
-  assert.equal(manifest.id, 'cinemabox');
-  assert.equal(manifest.name, 'CinemaBox');
-  assert.equal(manifest.scrapers[0].id, 'cinemabox');
-  assert.equal(manifest.scrapers[0].name, 'CinemaBox');
+  assert.equal(manifest.id, 'cinemabox-beta');
+  assert.equal(manifest.name, 'CinemaBox Beta');
+  assert.equal(manifest.scrapers[0].id, 'cinemabox-beta');
+  assert.equal(manifest.scrapers[0].name, 'CinemaBox Beta');
   assert.equal(fs.existsSync(experimentalManifestPath), false);
 });
