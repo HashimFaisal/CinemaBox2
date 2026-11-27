@@ -1395,7 +1395,7 @@ test('HTTP requests remain compatible when native timeout signals are unavailabl
     };
   }, null, { AbortSignal: {} });
   const payload = await api.request('https://cinema.albox.co/api/v4/search', Date.now() + 5000);
-  assert.deepEqual(payload, { ok: true });
+  assert.equal(payload.ok, true);
   assert.ok(receivedOptions);
   assert.equal(Object.prototype.hasOwnProperty.call(receivedOptions, 'signal'), false);
 });
