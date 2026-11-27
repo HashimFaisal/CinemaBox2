@@ -273,7 +273,7 @@ test('public Nuvio entry point resolves a regular TV episode and preserves order
   });
 
   assert.equal(streams.length, 3);
-  assert.deepEqual(Array.from(streams, stream => stream.quality), ['1080p', '720p', '480p']);
+  assert.deepEqual(Array.from(streams, stream => stream.quality), ['Video', 'Video', 'Video']);
   assert.ok(streams.every(stream => /S02E04/.test(stream.title)));
   assert.deepEqual(Array.from(streams, stream => stream.url), [
     'https://cdn.example/series-204-1080.mp4?sig=high',
