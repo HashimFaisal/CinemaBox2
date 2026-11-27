@@ -1350,11 +1350,17 @@ test('bundled engine runs fallback providers only when primary results are empty
   assert.equal(result.streams[0].providerId, 'primary');
 });
 
-test('next-test manifests and package version stay aligned', () => {
+test('stable CinemaBox manifest and separate next-test manifest keep their identities', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
   const testManifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.next-test.json'), 'utf8'));
   assert.equal(packageJson.version, manifest.version);
-  assert.equal(manifest.version, testManifest.version);
-  assert.deepEqual(manifest, testManifest);
+  assert.equal(manifest.id, 'cinemabox');
+  assert.equal(manifest.name, 'CinemaBox');
+  assert.equal(manifest.scrapers[0].id, 'cinemabox');
+  assert.equal(manifest.scrapers[0].name, 'CinemaBox');
+  assert.equal(testManifest.id, 'cinemabox-next-test');
+  assert.equal(testManifest.name, 'CinemaBox Next (Test)');
+  assert.notEqual(testManifest.version, manifest.version);
+  assert.notDeepEqual(manifest, testManifest);
 });
