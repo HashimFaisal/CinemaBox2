@@ -19,19 +19,19 @@ function qualityRank(value) {
 function isLikelyEmbedPage(value) {
   try {
     const parsed = new URL(value);
-    const host = parsed.hostname.toLowerCase().replace(/^www\\./, '');
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
     const path = parsed.pathname.toLowerCase();
     const knownEmbedHosts = [
       'vidsrc.to', 'vidsrc.me', 'vidsrc.xyz', 'vidsrc.cc', 'vidsrc.net',
       'vidlink.pro', 'autoembed.cc', '2embed.cc', 'smashystream.com', 'multiembed.mov'
     ];
     if (knownEmbedHosts.some(domain => host === domain || host.endsWith('.' + domain))) return true;
-    return /\\/(?:embed|iframe)(?:\\/|$)/.test(path);
+    return /\/(?:embed|iframe)(?:\/|$)/.test(path);
   } catch (_) { return false; }
 }
 
 function validHttpUrl(value) {
-  if (typeof value !== 'string' || !value || value !== value.trim() || /\\s|\\\\/.test(value)) return false;
+  if (typeof value !== 'string' || !value || value !== value.trim() || /\s|\\/.test(value)) return false;
   const protocolEnd = value.indexOf('://');
   if (protocolEnd < 0) return false;
   const protocol = value.slice(0, protocolEnd).toLowerCase();
