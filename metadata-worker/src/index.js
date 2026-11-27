@@ -175,8 +175,7 @@ export default {
       resources: [{ name: "meta", types: ["series"], idPrefixes: ["tmdb:"] }],
       catalogs: []
     });
-    const match = url.pathname.match(/^\/meta\/series\/tmdb%3A?(\d+)\.json$/i)
-      || url.pathname.match(/^\/meta\/series\/tmdb:(\d+)\.json$/i)
+    const match = url.pathname.match(/^\/meta\/series\/tmdb(?:%3A|:)(\d+)\.json$/i)
       || url.pathname.match(/^\/meta\/series\/(\d+)\.json$/i);
     if (!match) return json({ error: "Not found" }, 404);
     try {
