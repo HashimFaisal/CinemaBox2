@@ -11,6 +11,9 @@ test('normalizes qualities and rejects unsafe URLs', () => {
   assert.equal(validHttpUrl('https:///missing-host.mp4'), false);
   assert.equal(validHttpUrl('https://'), false);
   assert.equal(validHttpUrl('https://user:pass@cdn.example/video.mp4'), false);
+  assert.equal(validHttpUrl('https://vidsrc.to/v2/embed/tt1234567'), false);
+  assert.equal(validHttpUrl('https://cdn.example/embed/episode/42'), false);
+  assert.equal(validHttpUrl('https://cdn.example/video.mp4?mode=embed'), true);
   assert.equal(streamRejectionReason(null), 'invalid-item');
   assert.equal(streamRejectionReason({ url: '' }), 'missing-url');
   assert.equal(streamRejectionReason({ url: 'broken' }), 'invalid-url');
