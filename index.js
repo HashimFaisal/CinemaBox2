@@ -257,10 +257,10 @@ var createProviderEngine = (function () {
 const BASE = 'https://cinema.albox.co/api/v4';
 const FALLBACK_BASES = ['https://pucinema.albox.co/api/v4'];
 const CINEMETA = 'https://v3-cinemeta.strem.io';
-var runtimeRequestHeaders = Object.create(null);
+var requestHeadersByDeadline = Object.create(null);
 
 function configureRequestHeaders(args) {
-  runtimeRequestHeaders = Object.create(null);
+  var configured = Object.create(null);
   var source = args && args.headers && typeof args.headers === 'object' ? args.headers : {};
   var aliases = {
     'Device-Id': ['Device-Id', 'deviceId', 'device_id'],
@@ -277,8 +277,9 @@ function configureRequestHeaders(args) {
       if (source[keys[i]] != null && source[keys[i]] !== '') { value = source[keys[i]]; break; }
       if (args && args[keys[i]] != null && args[keys[i]] !== '') { value = args[keys[i]]; break; }
     }
-    if (value != null && String(value).trim()) runtimeRequestHeaders[headerName] = String(value).trim();
+    if (value != null && String(value).trim()) configured[headerName] = String(value).trim();
   });
+  return configured;
 }
 
 function shouldTryFallbackHost(error) {
@@ -453,7 +454,7 @@ function request(url, deadline) {
     'Referer': requestOrigin + '/',
     'Origin': requestOrigin,
     'Accept-Language': 'en-US,en;q=0.9'
-  }, runtimeRequestHeaders);
+  }, requestHeadersByDeadline[deadline] || {});
   var options = { headers: headers };
   if (controller) options.signal = controller.signal;
   var work = Promise.resolve().then(function () { return fetch(url, options); }).then(function (response) {
@@ -1803,7 +1804,7 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
       ? input
       : { tmdbId: input, mediaType: mediaType, season: season, episode: episode };
 
-    configureRequestHeaders(args);
+    requestHeadersByDeadline[deadline] = configureRequestHeaders(args);
     var rawType = String(args.mediaType || 'movie').toLowerCase();
     var oldType = rawType === 'tv' ? 'series' : rawType;
     var rawId = String(args.tmdbId || '').replace(/^imdb:/i, '');
@@ -1924,6 +1925,8 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
   }).catch(function (error) {
     diagnostic('entry', 'UNEXPECTED_ERROR', 'unknown', 'unknown', error);
     return [];
+  }).finally(function () {
+    delete requestHeadersByDeadline[deadline];
   });
 }
 
