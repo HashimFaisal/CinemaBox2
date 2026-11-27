@@ -859,6 +859,8 @@ test('stream URL validation uses URL parsing and rejects credentials or invalid 
     'https://cdn.example:bad/video.mp4',
     'ftp://cdn.example/video.mp4',
     'https://cdn.example/video file.mp4',
+    'https://vidsrc.to/v2/embed/tt1234567',
+    'https://cdn.example/embed/episode/42',
     ' https://cdn.example/video.mp4',
     'https://cdn.example\\\\video.mp4'
   ];
