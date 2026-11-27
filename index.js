@@ -99,8 +99,8 @@ var createProviderEngine = (function () {
         let timer;
       let timedOut = false;
       try {
-        const controller = typeof AbortController === 'function' ? new AbortController() : null;
-      const providerContext = Object.assign({}, context, {
+          const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        const providerContext = Object.assign({}, context, {
         providerId: provider.id, deadline: deadline,
         signal: controller ? controller.signal : undefined
       });
@@ -112,10 +112,10 @@ var createProviderEngine = (function () {
         } else {
           const timeout = new Promise((_, reject) => {
             timer = schedule(() => {
-            timedOut = true;
-            if (controller) controller.abort();
-            reject(new Error('PROVIDER_TIMEOUT'));
-          }, Math.max(1, deadline - now()));
+              timedOut = true;
+              if (controller) controller.abort();
+              reject(new Error('PROVIDER_TIMEOUT'));
+            }, Math.max(1, deadline - now()));
           });
           result = await Promise.race([work, timeout]);
           cancel(timer);
