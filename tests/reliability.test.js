@@ -8,12 +8,12 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
 
-function loadInternals(fetchImpl, logger) {
+function loadInternals(fetchImpl, logger, timers) {
   const sandbox = {
     URL,
     AbortController,
-    setTimeout,
-    clearTimeout,
+    setTimeout: timers && typeof timers.setTimeout === 'function' ? timers.setTimeout : setTimeout,
+    clearTimeout: timers && typeof timers.clearTimeout === 'function' ? timers.clearTimeout : clearTimeout,
     module: { exports: {} },
     fetch: fetchImpl,
     TMDB_API_KEY: 'test-secret-key',
@@ -297,6 +297,32 @@ test('bundled provider engine does not count work after an expired shared deadli
   assert.equal(result.providers[0].status, 'deadline-exceeded');
   assert.equal(calls, 0);
   assert.equal(engine.getHealth()['expired-provider'].attempts, 0);
+});
+
+test('HTTP requests avoid embedded deadline timers while retaining deadline guards', async () => {
+  let scheduledTimers = 0;
+  let fetchCalls = 0;
+  const api = loadInternals(() => {
+    fetchCalls += 1;
+    return Promise.resolve({
+      status: 200,
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ ok: true }))
+    });
+  }, { log() {}, error() {} }, {
+    setTimeout() { scheduledTimers += 1; return 1; },
+    clearTimeout() {}
+  });
+
+  const result = await api.request('https://api.example.test/fast', Date.now() + 5000);
+  assert.equal(result.ok, true);
+  assert.equal(scheduledTimers, 0, 'embedded HTTP requests must not schedule retained timeout handles');
+
+  await assert.rejects(
+    api.request('https://api.example.test/expired', Date.now() - 1),
+    /time budget exceeded/
+  );
+  assert.equal(fetchCalls, 1, 'expired request budgets must be rejected before fetch');
 });
 
 test('HTTP timing diagnostics report endpoint and duration without query secrets', async () => {
