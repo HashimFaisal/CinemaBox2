@@ -373,3 +373,22 @@ test('fallback provider runs when all primary providers return no valid streams'
   assert.equal(result.providers[1].status, 'ok');
   assert.deepEqual(result.streams.map(stream => stream.providerId), ['fallback']);
 });
+
+test('aborts provider work when its provider deadline expires', async () => {
+  let aborted = false;
+  const engine = createProviderEngine({
+    providerTimeoutMs: 30,
+    providers: [{
+      id: 'abortable',
+      getStreams: context => new Promise((resolve, reject) => {
+        context.signal.addEventListener('abort', () => {
+          aborted = true;
+          reject(new Error('aborted'));
+        });
+      })
+    }]
+  });
+  const result = await engine.getStreams({});
+  assert.equal(result.providers[0].status, 'timeout');
+  assert.equal(aborted, true);
+});
