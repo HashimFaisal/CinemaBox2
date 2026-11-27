@@ -509,7 +509,10 @@ function requestWithRetry(url, deadline, maxRetries) {
 
 function api(path, deadline, maxRetries) {
   var primaryUrl = BASE + '/' + path;
-  var retries = Number.isInteger(maxRetries) && maxRetries >= 0 ? maxRetries : 1;
+  // Beta fast-failover policy: try the primary host once, then move directly to the
+  // configured transport fallback on retryable network/server failures. Successful
+  // empty responses are still authoritative and never trigger fallback traffic.
+  var retries = Number.isInteger(maxRetries) && maxRetries >= 0 ? maxRetries : 0;
   return requestWithRetry(primaryUrl, deadline, retries).catch(function (primaryError) {
     if (!shouldTryFallbackHost(primaryError)) throw primaryError;
     var fallbackIndex = 0;
