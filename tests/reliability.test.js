@@ -8,23 +8,322 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
 
-function loadInternals(fetchImpl, logger) {
+function loadInternals(fetchImpl, logger, timers) {
   const sandbox = {
     URL,
-    setTimeout,
-    clearTimeout,
+    AbortController,
+    setTimeout: timers && typeof timers.setTimeout === 'function' ? timers.setTimeout : setTimeout,
+    clearTimeout: timers && typeof timers.clearTimeout === 'function' ? timers.clearTimeout : clearTimeout,
     module: { exports: {} },
     fetch: fetchImpl,
     TMDB_API_KEY: 'test-secret-key',
     console: logger || { log() {}, error() {} }
   };
   vm.runInNewContext(
-    source + '\nmodule.exports.__test = { redactSensitive, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, requestWithRetry, getPlayer, getStreamsForNuvio };',
+    source + '\nmodule.exports.__test = { createInternetArchiveProvider, createProviderEngine, redactSensitive, cached, searchCinemaBox, searchCinemaBoxTitles, cache, CACHE_MAX_ENTRIES, DETAILS_CACHE_TTL_MS, PLAYER_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS, METADATA_CACHE_TTL_MS, uniqueStreamVideos, validateStreamUrl, normalizeQuality, normalizeTitle, titleScore, findEpisode, buildStream, fetchStreams, ensureBudget, request, requestWithRetry, getPlayer, getStreamsForNuvio };',
     sandbox,
     { filename: 'index.js' }
   );
   return sandbox.module.exports.__test;
 }
+
+test("Internet Archive diagnostics use Nuvio's visible log channel and include raw search evidence", async () => {
+  const diagnostics = [];
+  const api = loadInternals(() => Promise.resolve({
+    ok: true,
+    json: async () => ({
+      response: {
+        numFound: 1,
+        docs: [{ identifier: 'thegeneral', title: 'The General', year: '1926' }]
+      }
+    })
+  }), {
+    error(...args) { diagnostics.push(args.join(' ')); },
+    warn() {},
+    log() {}
+  });
+  const provider = api.createInternetArchiveProvider();
+  await provider.getStreams({ type: 'movie', meta: { name: 'Other Title', year: '1926' } });
+  const line = diagnostics.find(item =>
+    item.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && item.includes('"stage":"search-complete"')
+  );
+  assert.ok(line, 'expected diagnostics on console.error so they remain visible in filtered scraper logs');
+  const payload = JSON.parse(line.slice(line.indexOf('{')));
+  assert.equal(payload.reportedTotal, 1);
+  assert.equal(payload.rawResults, 1);
+  assert.deepEqual(payload.sampleDocs, [
+    { identifier: 'thegeneral', title: 'The General', year: '1926' }
+  ]);
+  assert.equal(payload.candidates, 0);
+  assert.deepEqual(payload.searchShape.topLevelKeys, ['response']);
+  assert.equal(payload.searchShape.docsFieldType, 'array');
+});
+
+test('Internet Archive diagnostics expose malformed or error-shaped search payloads', async () => {
+  const logs = [];
+  const api = loadInternals(() => Promise.resolve({
+    ok: true,
+    json: async () => ({
+      error: 'advanced search temporarily unavailable',
+      response: { status: 400, message: 'query rejected', docs: null }
+    })
+  }), { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
+  const provider = api.createInternetArchiveProvider();
+  const streams = await provider.getStreams({
+    type: 'movie',
+    meta: { name: 'Diagnostic Target', year: '2024' }
+  });
+  assert.equal(streams.length, 0);
+  const line = logs.find(item =>
+    item.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && item.includes('"stage":"search-complete"')
+  );
+  assert.ok(line, 'expected an error-level search diagnostic');
+  const payload = JSON.parse(line.slice(line.indexOf('{')));
+  assert.deepEqual(payload.searchShape.topLevelKeys, ['error', 'response']);
+  assert.deepEqual(payload.searchShape.responseKeys, ['status', 'message', 'docs']);
+  assert.equal(payload.searchShape.docsFieldType, 'missing-or-null');
+  assert.equal(payload.searchShape.responseError, 'advanced search temporarily unavailable');
+  assert.equal(payload.searchShape.responseMessage, 'query rejected');
+  assert.equal(payload.rawResults, 0);
+  assert.equal(payload.candidates, 0);
+});
+
+test('Internet Archive adapter diagnoses empty search results', async () => {
+  const logs = [];
+  const api = loadInternals(() => Promise.resolve({
+    ok: true,
+    json: async () => ({ response: { docs: [] } })
+  }), { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
+  const provider = api.createInternetArchiveProvider();
+  const streams = await provider.getStreams({ type: 'movie', meta: { name: 'Unavailable Film', year: '2024' } });
+  assert.equal(streams.length, 0);
+  const search = logs.find(line => line.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && line.includes('"stage":"search-complete"'));
+  const complete = logs.find(line => line.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && line.includes('"stage":"complete"'));
+  assert.ok(search);
+  assert.ok(complete);
+  assert.equal(JSON.parse(search.slice(search.indexOf('{'))).rawResults, 0);
+  assert.equal(JSON.parse(complete.slice(complete.indexOf('{'))).streams, 0);
+});
+
+test('Internet Archive adapter returns a valid public-domain video and explains rejected files', async () => {
+  const logs = [];
+  const api = loadInternals(url => {
+    if (url.includes('/advancedsearch.php')) return Promise.resolve({
+      ok: true,
+      json: async () => ({ response: { docs: [
+        { identifier: 'valid-film', title: 'Valid Film', year: '1931' },
+        { identifier: 'restricted-film', title: 'Valid Film', year: '1931' }
+      ] } })
+    });
+    if (url.includes('/metadata/valid-film')) return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        metadata: {
+          title: 'Valid Film',
+          year: '1931',
+          licenseurl: 'https://creativecommons.org/publicdomain/zero/1.0/'
+        },
+        files: [
+          { name: 'valid-film-1080p.mp4', size: '1200000' },
+          { name: 'poster.jpg', size: '20000' },
+          { name: 'private.mp4', size: '1000', private: 'true' },
+          { name: 'empty.mp4', size: '0' },
+          { name: '../unsafe.mp4', size: '1000' },
+          { name: 'metadata.xml', size: '500' }
+        ]
+      })
+    });
+    if (url.includes('/metadata/restricted-film')) return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        metadata: { title: 'Valid Film', year: '1931', rights: 'All rights reserved' },
+        files: [{ name: 'restricted.mp4', size: '1000' }]
+      })
+    });
+    throw new Error('Unexpected URL: ' + url);
+  }, { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
+  const provider = api.createInternetArchiveProvider({ console: { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} } });
+  const streams = await provider.getStreams({
+    type: 'movie',
+    meta: { name: 'Valid Film', year: '1931' }
+  });
+  assert.equal(streams.length, 1, JSON.stringify({ logs, streams }));
+  assert.equal(streams[0].quality, '1080p');
+  assert.equal(streams[0].url, 'https://archive.org/download/valid-film/valid-film-1080p.mp4');
+  const complete = logs.find(line => line.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && line.includes('"stage":"complete"'));
+  assert.ok(complete);
+  const payload = JSON.parse(complete.slice(complete.indexOf('{')));
+  assert.equal(payload.rawResults, 2);
+  assert.equal(payload.candidates, 2);
+  assert.equal(payload.metadataRecords, 2);
+  assert.equal(payload.filesInspected, 6);
+  assert.equal(payload.playableFiles, 1);
+  assert.equal(payload.streams, 1);
+  assert.equal(payload.rejected.licenseNotPermitted, 1);
+  assert.equal(payload.rejected.unsupportedMedia, 2);
+  assert.equal(payload.rejected.privateOrMetadataFile, 1);
+  assert.equal(payload.rejected.invalidFileSize, 1);
+  assert.equal(payload.rejected.invalidFileName, 1);
+});
+
+test('Internet Archive adapter reports title and year candidate filtering', async () => {
+  const logs = [];
+  const api = loadInternals(() => Promise.resolve({
+    ok: true,
+    json: async () => ({ response: { docs: [
+      { identifier: 'wrong-title', title: 'Different Film', year: '1931' },
+      { identifier: 'wrong-year', title: 'Target Film', year: '1940' },
+      { title: 'Target Film', year: '1931' }
+    ] } })
+  }), { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
+  const provider = api.createInternetArchiveProvider();
+  const streams = await provider.getStreams({ type: 'movie', meta: { name: 'Target Film', year: '1931' } });
+  assert.equal(streams.length, 0);
+  const search = logs.find(line => line.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && line.includes('"stage":"search-complete"'));
+  const payload = JSON.parse(search.slice(search.indexOf('{')));
+  assert.equal(payload.rawResults, 3);
+  assert.equal(payload.candidates, 0);
+  assert.deepEqual(payload.filtered, { missingIdentifier: 1, titleMismatch: 1, yearMismatch: 1 });
+});
+
+test('Internet Archive searches original title variants, ranks candidates, and caches positive results', async () => {
+  const logs = [];
+  const requests = [];
+  const api = loadInternals(url => {
+    requests.push(url);
+    if (url.includes('/advancedsearch.php')) {
+      const term = new URL(url).searchParams.get('q') || '';
+      if (term.includes('Original Title')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            response: {
+              numFound: 1,
+              docs: [{ identifier: 'original-title-film', title: 'Original Title: Restored Edition', year: '1930', downloads: 500 }]
+            }
+          })
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ response: { numFound: 0, docs: [] } }) });
+    }
+    if (url.includes('/metadata/original-title-film')) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          metadata: {
+            title: 'Original Title: Restored Edition',
+            year: '1930',
+            licenseurl: 'https://creativecommons.org/publicdomain/zero/1.0/'
+          },
+          files: [{ name: 'restored-1080p.mp4', size: '2500000' }]
+        })
+      });
+    }
+    throw new Error('Unexpected URL: ' + url);
+  }, { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} });
+
+  const provider = api.createInternetArchiveProvider({ console: { error(...args) { logs.push(args.join(' ')); }, warn() {}, log() {} } });
+  const context = {
+    type: 'movie',
+    meta: { name: 'Localized Alias', original_title: 'Original Title', year: '1930' }
+  };
+  const first = await provider.getStreams(context);
+  assert.equal(first.length, 1, JSON.stringify({ logs, first }));
+  assert.equal(first[0].quality, '1080p');
+  assert.ok(requests.some(url => new URL(url).searchParams.get('q').includes('Original Title')));
+  assert.equal(requests.filter(url => url.includes('/advancedsearch.php')).length, 2);
+
+  const second = await provider.getStreams(context);
+  assert.equal(second.length, 1);
+  assert.equal(requests.length, 3, 'positive result should be served from cache without repeating search or metadata requests');
+
+  const search = logs.find(line => line.includes('[INTERNET ARCHIVE DIAGNOSTIC]') && line.includes('"stage":"search-complete"'));
+  assert.ok(search);
+  const payload = JSON.parse(search.slice(search.indexOf('{')));
+  assert.equal(payload.queryCount, 2);
+  assert.equal(payload.candidates, 1);
+  assert.ok(logs.some(line => line.includes('"stage":"cache-hit"') && line.includes('"cacheStatus":"hit"')));
+});
+
+test('bundled provider engine reports rejected streams and recovers after a transient outage', async () => {
+  const api = loadInternals(() => {});
+  let calls = 0;
+  const engine = api.createProviderEngine({
+    providers: [{
+      id: 'bundled-provider',
+      getStreams: async () => {
+        calls += 1;
+        if (calls === 1) return [{ url: '', quality: '1080p' }, { url: 'not-a-url' }];
+        if (calls === 2) throw new Error('temporary provider outage');
+        return [{ url: 'https://cdn.example/recovered.mp4', quality: '1080p' }];
+      }
+    }]
+  });
+
+  const empty = await engine.getStreams({});
+  assert.equal(empty.providers[0].status, 'empty');
+  assert.equal(empty.providers[0].rawStreams, 2);
+  assert.equal(empty.providers[0].rejectedStreams, 2);
+  assert.equal(empty.providers[0].rejectionReasons['missing-url'], 1);
+  assert.equal(empty.providers[0].rejectionReasons['invalid-url'], 1);
+
+  const failed = await engine.getStreams({});
+  assert.equal(failed.providers[0].status, 'error');
+
+  const recovered = await engine.getStreams({});
+  assert.equal(recovered.providers[0].status, 'ok');
+  assert.equal(recovered.streams.length, 1);
+  assert.equal(recovered.streams[0].url, 'https://cdn.example/recovered.mp4');
+  assert.equal(engine.getHealth()['bundled-provider'].validStreams, 1);
+  assert.equal(engine.getHealth()['bundled-provider'].emptyResponses, 1);
+  assert.equal(engine.getHealth()['bundled-provider'].errorCount, 1);
+  assert.equal(engine.getHealth()['bundled-provider'].rejectedStreams, 2);
+  assert.equal(engine.getHealth()['bundled-provider'].productiveRate, 1 / 3);
+});
+
+test('bundled provider engine does not count work after an expired shared deadline', async () => {
+  const api = loadInternals(() => {});
+  let calls = 0;
+  const engine = api.createProviderEngine({
+    providers: [{
+      id: 'expired-provider',
+      getStreams: async () => {
+        calls += 1;
+        return [];
+      }
+    }]
+  });
+  const result = await engine.getStreams({ deadline: Date.now() - 1 });
+  assert.equal(result.providers[0].status, 'deadline-exceeded');
+  assert.equal(calls, 0);
+  assert.equal(engine.getHealth()['expired-provider'].attempts, 0);
+});
+
+test('HTTP requests avoid embedded deadline timers while retaining deadline guards', async () => {
+  let scheduledTimers = 0;
+  let fetchCalls = 0;
+  const api = loadInternals(() => {
+    fetchCalls += 1;
+    return Promise.resolve({
+      status: 200,
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ ok: true }))
+    });
+  }, { log() {}, error() {} }, {
+    setTimeout() { scheduledTimers += 1; return 1; },
+    clearTimeout() {}
+  });
+
+  const result = await api.request('https://api.example.test/fast', Date.now() + 5000);
+  assert.equal(result.ok, true);
+  assert.equal(scheduledTimers, 0, 'embedded HTTP requests must not schedule retained timeout handles');
+
+  assert.throws(
+    () => api.request('https://api.example.test/expired', Date.now() - 1),
+    /time budget exceeded/
+  );
+  assert.equal(fetchCalls, 1, 'expired request budgets must be rejected before fetch');
+});
 
 test('HTTP timing diagnostics report endpoint and duration without query secrets', async () => {
   const logs = [];
@@ -83,7 +382,7 @@ test('failed search pages reject instead of becoming a cached no-result', async 
 
   await assert.rejects(api.searchCinemaBox('The Matrix', 'movie'));
   await assert.rejects(api.searchCinemaBox('The Matrix', 'movie'));
-  assert.equal(calls, 4, 'each search should retry its failed first-page request');
+  assert.equal(calls, 6, 'each search should retry the primary host and try the configured secondary host');
 });
 
 test('a genuine empty search result remains a valid cacheable no-result', async () => {
@@ -180,8 +479,10 @@ test('Arabic title normalization ignores diacritics and tatweel', () => {
 });
 
 
-test('stream objects expose quality as a separate Nuvio field', () => {
+test('stream objects expose quality as a separate Nuvio field and reject invalid URLs', () => {
   const api = loadInternals(() => {});
+  assert.equal(api.buildStream({ url: '', quality: '1080p' }, 'Invalid stream'), null);
+  assert.equal(api.buildStream({ url: 'https:///missing-host.mp4', quality: '1080p' }, 'Invalid stream'), null);
   const stream = api.buildStream({
     url: 'https://cdn.example/1080p.mp4',
     quality: '1080p'
@@ -222,8 +523,8 @@ test('episode lookup fetches season details only when requested season differs',
 
   const seasonTwoEpisode = await api.findEpisode(showDetails, 'show-123', 2, 1);
   assert.equal(seasonTwoEpisode, 'episode-201');
-  assert.equal(requests.length, 1, 'a different season should trigger exactly one details request');
-  assert.match(requests[0], /season_id=season-2-id/);
+  assert.equal(requests.length, 1, 'a different season should use the dedicated season-player endpoint');
+  assert.ok(requests[0].includes('/shows/seasons/player/season-2-id'));
 });
 
 
@@ -327,7 +628,7 @@ test('successful empty primary search uses original title only once', async () =
   });
 
   assert.deepEqual(Array.from(result.streams), []);
-  assert.equal(originalCalls, 2, 'one original-title search with one transient retry is expected');
+  assert.equal(originalCalls, 3, 'the original-title lookup retries the primary host once and then tries the secondary host');
 });
 
 test('missing initial season metadata forces an explicit season fetch', async () => {
@@ -356,7 +657,7 @@ test('missing initial season metadata forces an explicit season fetch', async ()
   const episodeId = await api.findEpisode(initialDetails, 'show-123', 3, 1);
   assert.equal(episodeId, 'episode-301');
   assert.equal(requests.length, 1, 'unknown initial season must not be assumed to be season 1');
-  assert.match(requests[0], /season_id=season-3-id/);
+  assert.ok(requests[0].includes('/shows/seasons/player/season-3-id'));
 });
 
 test('mixed numbered and unnumbered episode cards never use positional fallback', async () => {
@@ -1003,4 +1304,57 @@ test('localized and original title searches start concurrently', async () => {
   const match = await pending;
   assert.equal(match.title, 'The Matrix',
     'the primary title should win an equal-confidence tie');
+});
+
+
+test('bundled engine skips unsupported providers before creating embedded timeout timers', async () => {
+  const api = loadInternals(() => {});
+  let timerScheduled = false;
+  let providerCalled = false;
+  const engine = api.createProviderEngine({
+    providerTimeoutMs: 5000,
+    setTimeout: () => { timerScheduled = true; return 1; },
+    clearTimeout: () => {},
+    providers: [{
+      id: 'movie-only',
+      supports: context => context.type === 'movie',
+      getStreams: async () => {
+        providerCalled = true;
+        return [];
+      }
+    }]
+  });
+  const result = await engine.getStreams({ type: 'series' });
+  assert.equal(result.providers[0].status, 'unsupported');
+  assert.equal(timerScheduled, false);
+  assert.equal(providerCalled, false);
+  assert.equal(engine.getHealth()['movie-only'].attempts, 0);
+});
+
+
+test('bundled engine runs fallback providers only when primary results are empty', async () => {
+  const api = loadInternals(() => {});
+  let fallbackCalls = 0;
+  const engine = api.createProviderEngine({ providers: [
+    { id: 'primary', getStreams: async () => [{ url: 'https://cdn.example/primary.mp4', quality: '1080p' }] },
+    { id: 'fallback', fallbackOnlyWhenEmpty: true, getStreams: async () => {
+      fallbackCalls += 1;
+      return [{ url: 'https://cdn.example/fallback.mp4', quality: '720p' }];
+    } }
+  ] });
+  const result = await engine.getStreams({});
+  assert.equal(fallbackCalls, 0);
+  assert.equal(result.providers[1].status, 'skipped-primary-success');
+  assert.equal(engine.getHealth().fallback.attempts, 0);
+  assert.equal(result.streams.length, 1);
+  assert.equal(result.streams[0].providerId, 'primary');
+});
+
+test('next-test manifests and package version stay aligned', () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
+  const testManifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.next-test.json'), 'utf8'));
+  assert.equal(packageJson.version, manifest.version);
+  assert.equal(manifest.version, testManifest.version);
+  assert.deepEqual(manifest, testManifest);
 });

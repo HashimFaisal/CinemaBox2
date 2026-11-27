@@ -1,9 +1,9 @@
 {
-  "id": "cinemabox",
-  "name": "CinemaBox",
-  "version": "2.1.7",
-  "description": "Cinema Box direct movie and TV episode streams with Turbo Speed.",
-  "author": "Community",
+  "id": "cinemabox-next-test",
+  "name": "CinemaBox Next (Test)",
+  "version": "2.1.7-next.11",
+  "description": "Experimental CinemaBox Next Engine test build. Not an official release.",
+  "author": "HashimFaisal",
   "logo": "https://cinema.albox.co/favicon.ico",
   "contentLanguage": [
     "ar",
@@ -11,10 +11,10 @@
   ],
   "scrapers": [
     {
-      "id": "cinemabox",
-      "name": "CinemaBox",
-      "description": "Cinema Box movie and series sources",
-      "version": "2.1.7",
+      "id": "cinemabox-next-test",
+      "name": "CinemaBox Next (Test)",
+      "description": "Experimental provider-engine validation build",
+      "version": "2.1.7-next.11",
       "filename": "index.js",
       "supportedTypes": [
         "movie",

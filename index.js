@@ -1,7 +1,293 @@
 'use strict';
 
+// Bundled provider core: Nuvio loads the manifest's single index.js entrypoint.
+var createProviderEngine = (function () {
+  'use strict';
+  
+  const QUALITY = { '2160p': 2160, '1440p': 1440, '1080p': 1080, '720p': 720, '480p': 480, '360p': 360 };
+  
+  function normalizeQuality(value) {
+    const raw = String(value == null ? '' : value).trim();
+    if (!raw) return 'Video';
+    let match = raw.match(/^(?:4\s*k|uhd)(?:\s+(.+))?$/i);
+    if (match) return '2160p' + (match[1] ? ' ' + match[1].trim() : '');
+    match = raw.match(/^(\d{3,4})\s*p(?:\s+(.+))?$/i) || raw.match(/^(\d{3,4})p$/i);
+    return match ? match[1] + 'p' + (match[2] ? ' ' + match[2].trim() : '') : raw;
+  }
+  
+  function qualityRank(value) {
+    const match = normalizeQuality(value).match(/^(\d{3,4})p/i);
+    return match ? Number(match[1]) : (QUALITY[String(value).toLowerCase()] || -1);
+  }
+  
+  function validHttpUrl(value) {
+    if (typeof value !== 'string' || !value || value !== value.trim() || /\s|\\/.test(value)) return false;
+    const protocolEnd = value.indexOf('://');
+    if (protocolEnd < 0) return false;
+    const protocol = value.slice(0, protocolEnd).toLowerCase();
+    if (protocol !== 'http' && protocol !== 'https') return false;
+    const authority = value.slice(protocolEnd + 3).split(/[/?#]/, 1)[0];
+    if (!authority) return false;
+    try {
+      const parsed = new URL(value);
+      return (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+        Boolean(parsed.hostname) && !parsed.username && !parsed.password;
+    } catch (_) { return false; }
+  }
+  
+  function streamRejectionReason(stream) {
+    if (!stream || typeof stream !== 'object') return 'invalid-item';
+    if (typeof stream.url !== 'string' || !stream.url) return 'missing-url';
+    if (!validHttpUrl(stream.url)) return 'invalid-url';
+    return null;
+  }
+  
+  function normalizeStream(stream, provider) {
+    if (!stream || !validHttpUrl(stream.url)) return null;
+    const quality = normalizeQuality(stream.quality || stream.resolution);
+    const label = String(provider.name || provider.id) + ' ' + quality;
+    const output = {
+      name: String(stream.name || label),
+      title: String(stream.title || label),
+      url: stream.url,
+      quality: quality,
+      providerId: provider.id
+    };
+    if (stream.language) output.language = String(stream.language);
+    if (Array.isArray(stream.subtitles) && stream.subtitles.length) output.subtitles = stream.subtitles.slice();
+    if (Number.isFinite(Number(stream.sizeBytes)) && Number(stream.sizeBytes) > 0) output.sizeBytes = Number(stream.sizeBytes);
+    if (Number.isFinite(Number(stream.seeders)) && Number(stream.seeders) >= 0) output.seeders = Number(stream.seeders);
+    return output;
+  }
+  
+  function createProviderEngine(options) {
+    const config = options || {};
+    const providers = Array.isArray(config.providers) ? config.providers.slice() : [];
+    const concurrency = Math.max(1, Math.floor(config.maxConcurrency || 3));
+    const defaultTimeoutMs = Math.max(100, config.providerTimeoutMs || 8000);
+    const failureThreshold = Math.max(1, Math.floor(config.failureThreshold || 2));
+    const cooldownMs = Math.max(100, config.cooldownMs || 30000);
+    const maxCooldownMs = Math.max(cooldownMs, Number(config.maxCooldownMs) || 300000);
+    const now = config.now || Date.now;
+    const schedule = config.setTimeout || (typeof setTimeout === 'function' ? setTimeout : function () { return null; });
+    const cancel = config.clearTimeout || (typeof clearTimeout === 'function' ? clearTimeout : function () {});
+    const health = new Map();
+  
+    providers.forEach(provider => {
+      if (!provider || !/^[a-z0-9][a-z0-9._-]*$/i.test(String(provider.id || '')) ||
+          typeof provider.getStreams !== 'function') throw new TypeError('Invalid provider contract');
+      if (!health.has(provider.id)) health.set(provider.id, {
+        failures: 0, openUntil: 0, attempts: 0, successes: 0, validStreams: 0,
+        emptyResponses: 0, errorCount: 0, timeoutCount: 0, rejectedStreams: 0,
+        latencyEwmaMs: null, lastStatus: 'never', lastCooldownMs: 0
+      });
+    });
+  
+    async function runOne(provider, context) {
+      const state = health.get(provider.id);
+      if (provider.enabled === false) return { providerId: provider.id, status: 'disabled', streams: [] };
+      if (typeof provider.supports === 'function' && !provider.supports(context)) {
+        return { providerId: provider.id, status: 'unsupported', streams: [] };
+      }
+      if (state.openUntil > now()) return { providerId: provider.id, status: 'circuit-open', streams: [] };
+      const providerTimeoutMs = Math.max(100, Number(provider.timeoutMs) || defaultTimeoutMs);
+      const deadline = Math.min(Number.isFinite(context.deadline) ? context.deadline : Infinity, now() + providerTimeoutMs);
+      if (deadline <= now()) return { providerId: provider.id, status: 'deadline-exceeded', streams: [] };
+      const providerStartedAt = now();
+      state.attempts += 1;
+      console.log('[ENGINE TRACE] provider-start', provider.id, 'at:', providerStartedAt);
+  
+        let timer;
+      let timedOut = false;
+      try {
+          const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        const providerContext = Object.assign({}, context, {
+        providerId: provider.id, deadline: deadline,
+        signal: controller ? controller.signal : undefined
+      });
+      const work = Promise.resolve().then(() => provider.getStreams(providerContext));
+        // Embedded runtimes may retain completed timeout handles after clearTimeout.
+        let result;
+        if (provider.skipTimeoutTimer === true) {
+          result = await work;
+        } else {
+          const timeout = new Promise((_, reject) => {
+            timer = schedule(() => {
+              timedOut = true;
+              if (controller) controller.abort();
+              reject(new Error('PROVIDER_TIMEOUT'));
+            }, Math.max(1, deadline - now()));
+          });
+          result = await Promise.race([work, timeout]);
+          cancel(timer);
+        }
+        console.log('[ENGINE TRACE] provider-settled', provider.id, 'elapsedMs:', now() - providerStartedAt, 'timedOut:', timedOut);
+        const elapsedMs = Math.max(0, now() - providerStartedAt);
+        state.failures = 0;
+        state.openUntil = 0;
+        state.latencyEwmaMs = state.latencyEwmaMs == null ? elapsedMs : (state.latencyEwmaMs * 0.7) + (elapsedMs * 0.3);
+        const raw = Array.isArray(result) ? result : (result && Array.isArray(result.streams) ? result.streams : []);
+        const streams = [];
+        const rejectionReasons = {};
+        raw.forEach(item => {
+          const normalized = normalizeStream(item, provider);
+          if (normalized) {
+            streams.push(normalized);
+          } else {
+            const reason = streamRejectionReason(item) || 'invalid-stream';
+            rejectionReasons[reason] = (rejectionReasons[reason] || 0) + 1;
+          }
+        });
+        const rejectedStreams = raw.length - streams.length;
+        state.rejectedStreams += rejectedStreams;
+        if (streams.length > 0) state.successes += 1;
+        else state.emptyResponses += 1;
+        state.lastStatus = streams.length > 0 ? 'ok' : 'empty';
+        state.validStreams += streams.length;
+        return {
+          providerId: provider.id,
+          status: state.lastStatus,
+          elapsedMs: elapsedMs,
+          rawStreams: raw.length,
+          rejectedStreams: rejectedStreams,
+          rejectionReasons: rejectionReasons,
+          streams: streams
+        };
+      } catch (error) {
+        console.error('[ENGINE TRACE] provider-error', provider.id, 'elapsedMs:', now() - providerStartedAt, 'timedOut:', timedOut, 'error:', String(error && error.message || error));
+        if (timer !== undefined) cancel(timer);
+        const elapsedMs = Math.max(0, now() - providerStartedAt);
+        state.failures += 1;
+        state.errorCount += 1;
+        if (timedOut) state.timeoutCount += 1;
+        state.lastStatus = timedOut ? 'timeout' : 'error';
+        state.latencyEwmaMs = state.latencyEwmaMs == null ? elapsedMs : (state.latencyEwmaMs * 0.7) + (elapsedMs * 0.3);
+        if (state.failures >= failureThreshold) {
+          const exponent = Math.min(10, state.failures - failureThreshold);
+          state.lastCooldownMs = Math.min(maxCooldownMs, cooldownMs * Math.pow(2, exponent));
+          state.openUntil = now() + state.lastCooldownMs;
+        }
+        return { providerId: provider.id, status: state.lastStatus, elapsedMs: elapsedMs, streams: [] };
+      }
+    }
+  
+    async function getStreams(context) {
+      const engineStartedAt = now();
+      console.log('[ENGINE TRACE] engine-start', 'providers:', providers.length);
+      const input = context || {};
+      const results = new Array(providers.length);
+      const primaryIndexes = [];
+      const fallbackIndexes = [];
+      providers.forEach((provider, index) => {
+        (provider.fallbackOnlyWhenEmpty === true ? fallbackIndexes : primaryIndexes).push(index);
+      });
+      async function runIndexes(indexes) {
+        let cursor = 0;
+        async function worker() {
+          while (true) {
+            const position = cursor++;
+            if (position >= indexes.length) return;
+            const index = indexes[position];
+            results[index] = await runOne(providers[index], input);
+          }
+        }
+        await Promise.all(Array.from({ length: Math.min(concurrency, indexes.length) }, () => worker()));
+      }
+      await runIndexes(primaryIndexes);
+      const primaryHasStreams = primaryIndexes.some(index =>
+        results[index] && results[index].streams.length > 0
+      );
+      if (!primaryHasStreams && fallbackIndexes.length) await runIndexes(fallbackIndexes);
+      fallbackIndexes.forEach(index => {
+        if (!results[index]) results[index] = {
+          providerId: providers[index].id,
+          status: 'skipped-primary-success',
+          streams: []
+        };
+      });
+      const seen = new Set();
+      const streams = [];
+      results.forEach(result => result.streams.forEach(stream => {
+        if (seen.has(stream.url)) return;
+        seen.add(stream.url);
+        streams.push(stream);
+      }));
+      streams.sort((a, b) => {
+        const rank = qualityRank(b.quality) - qualityRank(a.quality);
+        if (rank) return rank;
+        const pa = providers.find(item => item.id === a.providerId);
+        const pb = providers.find(item => item.id === b.providerId);
+        const priorityDifference = Number(pb && pb.priority || 0) - Number(pa && pa.priority || 0);
+        if (priorityDifference) return priorityDifference;
+        const ha = health.get(a.providerId);
+        const hb = health.get(b.providerId);
+        const rateA = ha && ha.attempts ? ha.successes / ha.attempts : 0.5;
+        const rateB = hb && hb.attempts ? hb.successes / hb.attempts : 0.5;
+        if (rateB !== rateA) return rateB - rateA;
+        const latencyA = ha && ha.latencyEwmaMs != null ? ha.latencyEwmaMs : Infinity;
+        const latencyB = hb && hb.latencyEwmaMs != null ? hb.latencyEwmaMs : Infinity;
+        return latencyA - latencyB;
+      });
+      return { streams: streams, providers: results };
+    }
+  
+    function getHealth() {
+      const snapshot = {};
+      health.forEach((state, id) => {
+        snapshot[id] = {
+          failures: state.failures, circuitOpen: state.openUntil > now(),
+          retryAt: state.openUntil > now() ? state.openUntil : null,
+          cooldownMs: state.lastCooldownMs,
+          attempts: state.attempts, successes: state.successes,
+          successRate: state.attempts ? state.successes / state.attempts : null,
+          productiveRate: state.attempts ? state.successes / state.attempts : null,
+          emptyResponses: state.emptyResponses, errorCount: state.errorCount,
+          timeoutCount: state.timeoutCount, rejectedStreams: state.rejectedStreams,
+          validStreams: state.validStreams, latencyEwmaMs: state.latencyEwmaMs,
+          lastStatus: state.lastStatus
+        };
+      });
+      return snapshot;
+    }
+    return { getStreams: getStreams, getHealth: getHealth };
+  }
+  
+  return createProviderEngine;
+})();
+
 const BASE = 'https://cinema.albox.co/api/v4';
+const FALLBACK_BASES = ['https://pucinema.albox.co/api/v4'];
 const CINEMETA = 'https://v3-cinemeta.strem.io';
+var requestHeadersByDeadline = Object.create(null);
+
+function configureRequestHeaders(args) {
+  var configured = Object.create(null);
+  var source = args && args.headers && typeof args.headers === 'object' ? args.headers : {};
+  var aliases = {
+    'Device-Id': ['Device-Id', 'deviceId', 'device_id'],
+    'Device-Model': ['Device-Model', 'deviceModel', 'device_model'],
+    'Device-OS-Version': ['Device-OS-Version', 'deviceOsVersion', 'device_os_version'],
+    'App-Version': ['App-Version', 'appVersion', 'app_version'],
+    'JWT': ['JWT', 'jwt'],
+    'Authorization': ['Authorization', 'authorization']
+  };
+  Object.keys(aliases).forEach(function (headerName) {
+    var keys = aliases[headerName];
+    var value;
+    for (var i = 0; i < keys.length; i++) {
+      if (source[keys[i]] != null && source[keys[i]] !== '') { value = source[keys[i]]; break; }
+      if (args && args[keys[i]] != null && args[keys[i]] !== '') { value = args[keys[i]]; break; }
+    }
+    if (value != null && String(value).trim()) configured[headerName] = String(value).trim();
+  });
+  return configured;
+}
+
+function shouldTryFallbackHost(error) {
+  var message = String(error && error.message || error);
+  return /HTTP (?:408|425|429|500|502|503|504)\b/.test(message) ||
+    /network|fetch failed|timeout|timed out|ECONN|ENOTFOUND|EAI_AGAIN/i.test(message);
+}
 
 function redactSensitive(value) {
   var text = String(value == null ? '' : value)
@@ -18,7 +304,7 @@ const PLAYER_CACHE_TTL_MS = 30000;
 const SEARCH_CACHE_TTL_MS = 600000;
 const METADATA_CACHE_TTL_MS = 600000;
 const PROVIDER_BUDGET_MS = 45000;
-const SEARCH_MAX_PAGES = 5;
+const SEARCH_MAX_PAGES = 3;
 
 function ensureBudget(deadline, stage) {
   if (deadline && Date.now() >= deadline) {
@@ -147,39 +433,33 @@ function request(url, deadline) {
   try {
     var parsedUrl = new URL(url);
     requestLabel = parsedUrl.hostname + parsedUrl.pathname;
-  } catch (error) {
-    requestLabel = 'invalid-url';
-  }
+  } catch (error) { requestLabel = 'invalid-url'; }
+  var requestOrigin = 'https://cinema.albox.co';
+  try { requestOrigin = new URL(url).origin; } catch (_) {}
+  var headers = Object.assign({
+    Accept: 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36',
+    'Referer': requestOrigin + '/',
+    'Origin': requestOrigin,
+    'Accept-Language': 'en-US,en;q=0.9'
+  }, requestHeadersByDeadline[deadline] || {});
 
-  return fetch(url, {
-    headers: {
-      Accept: 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36',
-      'Referer': 'https://cinema.albox.co/',
-      'Origin': 'https://cinema.albox.co',
-      'Accept-Language': 'en-US,en;q=0.9'
-    }
-  })
-  .then(function (response) {
+  // Nuvio's embedded timer implementation can retain cleared timeout handles
+  // and keep a completed scraper invocation alive until the 45s deadline.
+  // Enforce the shared budget at request/stage boundaries without scheduling
+  // a per-request timer; this mirrors the timer-free embedded provider engine.
+  return fetch(url, { headers: headers }).then(function (response) {
     return response.text().then(function (body) {
+      ensureBudget(deadline, 'HTTP response body');
       timingLogged = true;
       console.log('[HTTP TIMING]', requestLabel, 'status:', response.status,
         'ms:', Date.now() - requestStart, 'bytes:', body.length);
-      if (!response.ok) {
-        throw new Error('HTTP ' + response.status + ': ' + redactSensitive(url) + ' | BODY: ' + redactSensitive(body.slice(0, 700)));
-      }
-      try {
-        return JSON.parse(body);
-      } catch (e) {
-        throw new Error('Invalid JSON from ' + redactSensitive(url) + ': ' + redactSensitive(body.slice(0, 300)));
-      }
+      if (!response.ok) throw new Error('HTTP ' + response.status + ': ' + redactSensitive(url) + ' | BODY: ' + redactSensitive(body.slice(0, 700)));
+      try { return JSON.parse(body); }
+      catch (e) { throw new Error('Invalid JSON from ' + redactSensitive(url) + ': ' + redactSensitive(body.slice(0, 300))); }
     });
-  })
-  .catch(function (error) {
-    if (!timingLogged) {
-      console.log('[HTTP TIMING]', requestLabel, 'status: failed',
-        'ms:', Date.now() - requestStart);
-    }
+  }).catch(function (error) {
+    if (!timingLogged) console.log('[HTTP TIMING]', requestLabel, 'status: failed', 'ms:', Date.now() - requestStart);
     throw error;
   });
 }
@@ -211,8 +491,25 @@ function requestWithRetry(url, deadline, maxRetries) {
   return attempt(0);
 }
 
-function api(path, deadline) {
-  return request(BASE + '/' + path, deadline);
+function api(path, deadline, maxRetries) {
+  var primaryUrl = BASE + '/' + path;
+  var retries = Number.isInteger(maxRetries) && maxRetries >= 0 ? maxRetries : 1;
+  return requestWithRetry(primaryUrl, deadline, retries).catch(function (primaryError) {
+    if (!shouldTryFallbackHost(primaryError)) throw primaryError;
+    var fallbackIndex = 0;
+    function tryNext() {
+      if (fallbackIndex >= FALLBACK_BASES.length) throw primaryError;
+      var fallbackUrl = FALLBACK_BASES[fallbackIndex++] + '/' + path;
+      console.log('[API HOST FALLBACK]', 'host:', fallbackUrl.split('/')[2],
+        'reason:', /HTTP \d+/.test(String(primaryError.message || primaryError))
+          ? String(primaryError.message).match(/HTTP \d+/)[0] : 'network');
+      return requestWithRetry(fallbackUrl, deadline, 0).catch(function (fallbackError) {
+        if (shouldTryFallbackHost(fallbackError)) return tryNext();
+        throw fallbackError;
+      });
+    }
+    return tryNext();
+  });
 }
 
 function normalizeType(value) {
@@ -264,14 +561,61 @@ function getDetails(id, seasonId, deadline) {
   var key = 'details-' + id + '-' + (seasonId || 'default');
   return cached(key, function () {
     console.log('[DETAILS FETCH]', 'show:', id, 'seasonId:', seasonId || 'default');
-    return requestWithRetry(BASE + '/shows/shows/dynamic/' + id + suffix, deadline, 1);
+    return api('shows/shows/dynamic/' + encodeURIComponent(id) + suffix, deadline);
+  }, DETAILS_CACHE_TTL_MS);
+}
+
+function getSeasonPlayer(seasonId, deadline) {
+  return cached('season-player-' + seasonId, function () {
+    console.log('[SEASON PLAYER FETCH]', 'seasonId:', seasonId);
+    return api('shows/seasons/player/' + encodeURIComponent(seasonId), deadline);
   }, DETAILS_CACHE_TTL_MS);
 }
 
 function getPlayer(episodeId, deadline) {
   return cached('player-' + episodeId, function () {
-    return requestWithRetry(BASE + '/shows/episodes/player/' + episodeId, deadline, 1);
+    return api('shows/episodes/player/' + encodeURIComponent(episodeId), deadline);
   }, PLAYER_CACHE_TTL_MS);
+}
+
+function normalizeSeasonPlayerPayload(payload) {
+  var candidates = [];
+  if (Array.isArray(payload)) candidates.push(payload);
+  if (payload && Array.isArray(payload.episodes)) candidates.push(payload.episodes);
+  if (payload && Array.isArray(payload.data)) candidates.push(payload.data);
+  if (payload && payload.data && Array.isArray(payload.data.episodes)) candidates.push(payload.data.episodes);
+  if (payload && payload.result && Array.isArray(payload.result.episodes)) candidates.push(payload.result.episodes);
+  if (payload && Array.isArray(payload.results)) candidates.push(payload.results);
+  if (payload && Array.isArray(payload.items)) candidates.push(payload.items);
+  if (payload && Array.isArray(payload.sections)) {
+    payload.sections.forEach(function (section) {
+      if (section && Array.isArray(section.data)) candidates.push(section.data);
+    });
+  }
+  var episodes = [];
+  var seen = Object.create(null);
+  candidates.forEach(function (items) {
+    items.forEach(function (item) {
+      if (!item || typeof item !== 'object') return;
+      var id = item.id || item.episode_id;
+      if (id == null || id === '') return;
+      var key = String(id);
+      if (seen[key]) return;
+      seen[key] = true;
+      var normalized = Object.assign({}, item, {
+        id: id,
+        card_type: 'episode',
+        description: item.episode_number != null ? String(item.episode_number) :
+          (item.episodeNumber != null ? String(item.episodeNumber) : item.description)
+      });
+      episodes.push(normalized);
+    });
+  });
+  if (!episodes.length) return null;
+  return {
+    post_info: payload && payload.post_info ? payload.post_info : {},
+    sections: [{ section_type: 'episodes', data: episodes }]
+  };
 }
 
 function getExternalMeta(type, id, deadline) {
@@ -325,21 +669,12 @@ function searchCinemaBox(title, type, year, deadline) {
       var requestKey = String(term) + '::' + pageNum;
       if (pageRequests.has(requestKey)) return pageRequests.get(requestKey);
       var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
-      function attempt(retry) {
-        return api('search?' + queryStr, deadline).catch(function (error) {
-          var message = String(error && error.message || error);
-          var retryable = !/HTTP (?:400|401|403|404|405|410|422)\b/.test(message);
-          if (retry < 1 && retryable) {
-            console.log('[SEARCH PAGE RETRY]', 'term:', term, 'page:', pageNum);
-            return attempt(retry + 1);
-          }
-          failedPageCount++;
-          console.log('[SEARCH PAGE ERROR]', term, 'page', pageNum,
-            error && error.message ? redactSensitive(error.message) : redactSensitive(error));
-          return null;
-        });
-      }
-      var pending = attempt(0);
+      var pending = api('search?' + queryStr, deadline).catch(function (error) {
+        failedPageCount++;
+        console.log('[SEARCH PAGE ERROR]', term, 'page', pageNum,
+          error && error.message ? redactSensitive(error.message) : redactSensitive(error));
+        return null;
+      });
       pageRequests.set(requestKey, pending);
       return pending;
     }
@@ -361,6 +696,7 @@ function searchCinemaBox(title, type, year, deadline) {
     function fetchFirstPage(term) {
       var termItems = new Map();
       return fetchSearchPage(term, 1).then(function (data) {
+        console.log('[SEARCH TRACE] first-page-json-ready', 'term:', term, 'hasData:', Boolean(data), 'at:', Date.now());
         var before = foundItems.size;
         var count = data ? addResults(data, termItems) : 0;
         var best = rankItems(Array.from(termItems.values()));
@@ -400,7 +736,7 @@ function searchCinemaBox(title, type, year, deadline) {
           return count;
         });
         var best = rankItems(Array.from(foundItems.values()));
-        if (best && best.score >= 0.95) {
+        if (best && best.titleScore >= 0.75 && best.score >= 0.75) {
           console.log('[SEARCH STOP]', 'reason: strong-score', 'score:', best.score.toFixed(2));
           return;
         }
@@ -420,7 +756,7 @@ function searchCinemaBox(title, type, year, deadline) {
       var firstCount = firstPage.count;
       var firstBest = firstPage.best;
       var best = rankItems(Array.from(foundItems.values()));
-      if (best && best.score >= 0.95) {
+      if (best && best.titleScore >= 0.75 && best.score >= 0.75) {
         console.log('[SEARCH STOP]', 'reason: first-page-strong-match', 'title:', best.item.title,
           'titleScore:', best.titleScore.toFixed(2), 'score:', best.score.toFixed(2));
         return;
@@ -437,7 +773,7 @@ function searchCinemaBox(title, type, year, deadline) {
       return fallbackSearch.then(function (fallbackPage) {
         var fallbackCount = fallbackPage.count;
         best = rankItems(Array.from(foundItems.values()));
-        if (best && best.score >= 0.95) {
+        if (best && best.titleScore >= 0.75 && best.score >= 0.75) {
           console.log('[SEARCH STOP]', 'reason: fallback-strong-match', 'title:', best.item.title,
             'titleScore:', best.titleScore.toFixed(2), 'score:', best.score.toFixed(2));
           return;
@@ -478,101 +814,179 @@ function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadlin
     titles.push(alternate);
   }
 
-  // Search localized and original titles concurrently. Once one valid result
-  // arrives, allow a short arbitration window for a more accurate candidate.
-  var searches = titles.map(function (title, index) {
-    console.log('[SEARCH PARALLEL]', 'query:', title, 'index:', index);
-    return searchCinemaBox(title, type, year, deadline).then(function (item) {
-      return { title: title, index: index, item: item, error: null };
-    }).catch(function (error) {
-      return { title: title, index: index, item: null, error: error };
-    });
-  });
+  // Run title variants concurrently. Return an exact alternate immediately,
+  // but do not let a merely fuzzy alternate beat a potentially exact primary match.
+  // Avoid timer-based arbitration because embedded Nuvio runtimes may delay timers.
+  var completed = false;
+  var settled = 0;
+  var firstError = null;
+  var bestCandidate = null;
+  var bestTitle = '';
+  var bestConfidence = -Infinity;
+
+  function confidenceFor(item) {
+    var confidence = Math.max(titleScore(primaryTitle, item.title),
+      alternate ? titleScore(alternate, item.title) : 0);
+    var itemYear = releaseYear(item.year);
+    if (year && itemYear && itemYear !== '1900') {
+      confidence += itemYear === String(year) ? 0.1 : -0.1;
+    }
+    return confidence;
+  }
+
+  function finish(item, title, reason, confidence) {
+    if (completed) return item;
+    completed = true;
+    console.log('[SEARCH PARALLEL MATCH]', 'query:', title,
+      'title:', item.title, 'strategy:', reason,
+      'confidence:', confidence.toFixed(2),
+      'completedQueries:', settled, 'totalQueries:', titles.length);
+    return item;
+  }
 
   return new Promise(function (resolve, reject) {
-    var settled = 0;
-    var candidates = [];
-    var firstError = null;
-    var completed = false;
-    var arbitrationTimer = null;
-    var arbitrationDelayMs = 120;
-
-    function candidateScore(result) {
-      var item = result.item;
-      var primaryScore = titleScore(primaryTitle, item.title);
-      var alternateScore = alternate ? titleScore(alternate, item.title) : 0;
-      var score = Math.max(primaryScore, alternateScore);
-      var itemYear = releaseYear(item.year);
-      if (year && itemYear && itemYear !== '1900') {
-        score += itemYear === String(year) ? 0.1 : -0.1;
+    function settleIfComplete() {
+      if (completed || settled !== titles.length) return;
+      if (bestCandidate) {
+        resolve(finish(bestCandidate, bestTitle, 'best-completed-candidate', bestConfidence));
+      } else if (firstError) {
+        completed = true;
+        reject(firstError);
+      } else {
+        completed = true;
+        resolve(null);
       }
-      return score;
     }
 
-    function finishWithBest(reason) {
-      if (completed || !candidates.length) return;
-      completed = true;
-      if (arbitrationTimer) clearTimeout(arbitrationTimer);
-      candidates.sort(function (a, b) {
-        var scoreDifference = candidateScore(b) - candidateScore(a);
-        if (Math.abs(scoreDifference) > 0.000001) return scoreDifference;
-        // Prefer the primary/localized title when confidence is equivalent.
-        return a.index - b.index;
-      });
-      var best = candidates[0];
-      console.log('[SEARCH PARALLEL MATCH]', 'query:', best.title,
-        'title:', best.item.title, 'strategy:', reason,
-        'confidence:', candidateScore(best).toFixed(2),
-        'completedQueries:', settled, 'totalQueries:', searches.length);
-      resolve(best.item);
-    }
-
-    function finishWithoutMatch() {
-      if (completed || settled !== searches.length || candidates.length) return;
-      completed = true;
-      if (firstError) reject(firstError);
-      else resolve(null);
-    }
-
-    searches.forEach(function (search) {
-      search.then(function (result) {
-        if (completed) return;
+    titles.forEach(function (title, index) {
+      console.log('[SEARCH PARALLEL]', 'query:', title, 'index:', index);
+      searchCinemaBox(title, type, year, deadline).then(function (item) {
         settled++;
-        if (result.item) {
-          candidates.push(result);
-          if (searches.length === 1) {
-            finishWithBest('single-query');
-          } else if (settled === searches.length) {
-            finishWithBest('all-queries-settled');
-          } else if (!arbitrationTimer) {
-            arbitrationTimer = setTimeout(function () {
-              finishWithBest('confidence-window');
-            }, arbitrationDelayMs);
-          }
+        console.log('[SEARCH TRACE] query-settled', 'query:', title,
+          'hasItem:', Boolean(item), 'hasError:', false, 'at:', Date.now());
+        if (completed || !item) {
+          settleIfComplete();
           return;
         }
-        if (result.error && !firstError) firstError = result.error;
-        if (candidates.length && settled === searches.length) {
-          finishWithBest('all-queries-settled');
-        } else {
-          finishWithoutMatch();
+
+        var confidence = confidenceFor(item);
+        if (confidence > bestConfidence) {
+          bestCandidate = item;
+          bestTitle = title;
+          bestConfidence = confidence;
         }
+
+        // The primary query is authoritative. An alternate may short-circuit only
+        // when its candidate is an exact title match (year bonus may raise it to 1.1).
+        var exactAlternate = index > 0 && titleScore(title, item.title) >= 1;
+        if (index === 0 || exactAlternate) {
+          resolve(finish(item, title,
+            index === 0 ? 'primary-title-match' : 'exact-alternate-match',
+            confidence));
+          return;
+        }
+
+        console.log('[SEARCH PARALLEL DEFER]', 'query:', title,
+          'confidence:', confidence.toFixed(2),
+          'reason: fuzzy-alternate-await-primary');
+        settleIfComplete();
+      }).catch(function (error) {
+        settled++;
+        console.log('[SEARCH TRACE] query-settled', 'query:', title,
+          'hasItem:', false, 'hasError:', true, 'at:', Date.now());
+        if (completed) return;
+        if (!firstError) firstError = error;
+        settleIfComplete();
       });
     });
   });
 }
 
 function parseExternalId(id) {
-  var match = String(id).match(/^(tt\d+)(?::(\d+):(\d+))?$/);
+  var value = String(id || '');
+  var match = value.match(/^(tt\d+)(?::(\d+):(\d+))?$/i);
+  if (match) {
+    return {
+      imdbId: match[1],
+      season: match[2] ? Number(match[2]) : null,
+      episode: match[3] ? Number(match[3]) : null
+    };
+  }
+  match = value.match(/^tmdb:(\d+)(?::(\d+):(\d+))?$/i);
   if (!match) return null;
   return {
-    imdbId: match[1],
+    imdbId: null,
+    tmdbId: match[1],
     season: match[2] ? Number(match[2]) : null,
     episode: match[3] ? Number(match[3]) : null
   };
 }
 
 function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
+  var postInfo = details && details.post_info || {};
+  var seasonId = null;
+  var currentSeasonValue = postInfo.season_number;
+  var currentSeason = currentSeasonValue == null || currentSeasonValue === '' ? NaN : Number(currentSeasonValue);
+  if (Number.isInteger(currentSeason) && currentSeason === seasonNumber && postInfo.current_season_id) {
+    seasonId = postInfo.current_season_id;
+  }
+  if (!seasonId && Array.isArray(details && details.sections)) {
+    details.sections.some(function (section) {
+      return (section.data || []).some(function (item) {
+        if (String(item.card_type || '').toLowerCase() !== 'seasonposter' || !item.id) return false;
+        var label = String(item.title || '').trim();
+        var match = label.match(/\d+/);
+        var number = /^specials?$/i.test(label) ? 0 : (match ? Number(match[0]) : null);
+        if (number === seasonNumber) { seasonId = item.id; return true; }
+        return false;
+      });
+    });
+  }
+  if (seasonId) {
+    ensureBudget(deadline, 'season player');
+    return getSeasonPlayer(seasonId, deadline).then(function (payload) {
+      var normalized = normalizeSeasonPlayerPayload(payload);
+      if (normalized) {
+        console.log('[SEASON PLAYER]', 'seasonId:', seasonId,
+          'episodes:', normalized.sections[0].data.length);
+        return findEpisodeFromSeasonDetails(normalized, seasonNumber, episodeNumber);
+      }
+      console.log('[SEASON PLAYER FALLBACK]', 'reason: no-recognized-episodes', 'seasonId:', seasonId);
+      return null;
+    }).catch(function (error) {
+      console.log('[SEASON PLAYER FALLBACK]', 'seasonId:', seasonId,
+        'reason:', redactSensitive(error && error.message || error));
+      return null;
+    }).then(function (episodeId) {
+      if (episodeId) return episodeId;
+      return findEpisodeFromLegacyDetails(details, showId, seasonNumber, episodeNumber, deadline);
+    });
+  }
+  return findEpisodeFromLegacyDetails(details, showId, seasonNumber, episodeNumber, deadline);
+}
+
+function findEpisodeFromSeasonDetails(sd, seasonNumber, episodeNumber) {
+  var rawSeason = sd && sd.post_info && sd.post_info.season_number;
+  if (rawSeason != null && rawSeason !== '' && Number(rawSeason) !== seasonNumber) return null;
+  var episodes = sd && sd.sections && sd.sections[0] && sd.sections[0].data || [];
+  for (var i = 0; i < episodes.length; i++) {
+    var item = episodes[i];
+    var rawNumber = item.episode_number != null ? item.episode_number :
+      (item.episodeNumber != null ? item.episodeNumber : item.description);
+    var number = Number(rawNumber);
+    if (!Number.isSafeInteger(number) || number < 1) {
+      var description = String(item.description == null ? '' : item.description).trim();
+      var labelled = description.match(/\b(?:episode|ep|e|special)\s*0*(\d+)\b/i) ||
+        description.match(/\bs\s*0*\d+\s*e\s*0*(\d+)\b/i);
+      number = labelled ? Number(labelled[1]) : NaN;
+    }
+    var itemSeason = item.seasonNumber != null ? Number(item.seasonNumber) :
+      (item.season_number != null ? Number(item.season_number) : seasonNumber);
+    if (itemSeason === seasonNumber && number === episodeNumber) return item.id;
+  }
+  return null;
+}
+function findEpisodeFromLegacyDetails(details, showId, seasonNumber, episodeNumber, deadline) {
   var seasonDetails = details;
   var rawCurrentSeason = details.post_info && details.post_info.season_number;
   var parsedCurrentSeason = rawCurrentSeason == null || rawCurrentSeason === ''
@@ -702,17 +1116,19 @@ function resolveImdbId(id, mediaType, deadline) {
   });
 }
 function buildStream(video, displayTitle) {
+  if (!video || !validateStreamUrl(video.url)) return null;
   var quality = normalizeQuality(video.quality);
   var streamLabel = 'CinemaBox (' + displayTitle + ') ' + quality;
-  return {
+  var output = {
     name: streamLabel,
     title: streamLabel,
     url: video.url,
     quality: quality
   };
+  return output;
 }
 
-function fetchStreams(type, id, suppliedMeta, deadline) {
+function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
   var timingStart = Date.now();
   var stageStart = timingStart;
   var episodeId = null;
@@ -730,6 +1146,7 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
     : getExternalMeta(type, external.imdbId, deadline);
 
   return metaPromise.then(function (meta) {
+    console.log('[FETCH TRACE] metadata-ready', 'elapsedMs:', Date.now() - timingStart);
     if (!meta || (!meta.name && !meta.original_name)) {
       diagnostic('metadata', 'METADATA_INCOMPLETE', type, id);
       return null;
@@ -746,6 +1163,7 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
     
     failureStage = 'search';
     ensureBudget(deadline, 'primary title search');
+    console.log('[FETCH TRACE] search-start', 'at:', Date.now());
     return searchCinemaBoxTitles(
       meta.name || meta.original_name,
       meta.original_name,
@@ -753,6 +1171,7 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
       year,
       deadline
     ).then(function (found) {
+      console.log('[FETCH TRACE] search-finish', 'elapsedMs:', Date.now() - stageStart, 'found:', Boolean(found));
       console.log('[TIMING] search:', Date.now() - stageStart, 'ms');
       stageStart = Date.now();
       return found;
@@ -765,7 +1184,9 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
     }
     failureStage = 'details';
     ensureBudget(deadline, 'show details');
+    console.log('[FETCH TRACE] details-start', 'at:', Date.now());
     return getDetails(found.id, null, deadline).then(function (details) {
+      console.log('[FETCH TRACE] details-finish', 'elapsedMs:', Date.now() - stageStart);
       console.log('[TIMING] details:', Date.now() - stageStart, 'ms');
       stageStart = Date.now();
       var post = details.post_info;
@@ -799,10 +1220,20 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
 
     failureStage = 'player';
     ensureBudget(deadline, 'player lookup');
+    console.log('[FETCH TRACE] player-start', 'episode:', episodeId, 'at:', Date.now());
     return getPlayer(episodeId, deadline).then(function (player) {
+      console.log('[FETCH TRACE] player-finish', 'elapsedMs:', Date.now() - stageStart);
       console.log('[TIMING] player:', Date.now() - stageStart, 'ms');
       var streams = [];
-      if (!player || !Array.isArray(player.videos)) {
+      var playerVideos = player && Array.isArray(player.videos) ? player.videos : [];
+      if (!playerVideos.length && player && player.file) {
+        var fileItems = Array.isArray(player.file) ? player.file : [player.file];
+        playerVideos = fileItems.map(function (file) {
+          if (typeof file === 'string') return { url: file, quality: player.quality };
+          return Object.assign({}, file, { url: file.url || file.file || file.src });
+        });
+      }
+      if (!player || !playerVideos.length) {
         console.error('[CINEMABOX QUALITY AUDIT]', JSON.stringify({
           stage: 'player_response', status: 'invalid', rawVideos: null,
           validUniqueStreams: 0, qualities: [], has2160p: null
@@ -811,9 +1242,12 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
           new Error('Expected videos array; received ' + (player && typeof player.videos)));
         return { streams: [] };
       }
-      var playerVideos = player.videos;
       if (playerVideos.length === 0) {
         diagnostic('player', 'PLAYER_EMPTY', type, id);
+      }
+      var subtitleTracks = Array.isArray(player.subtitles) ? player.subtitles : [];
+      if (player.parental_access != null) {
+        console.log('[PLAYER ACCESS]', 'parentalAccessFieldPresent:', true);
       }
       console.log('[PLAYER DIAGNOSTICS]', type, id,
         'playerKeys:', Object.keys(player || {}),
@@ -830,9 +1264,19 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
       });
       uniqueStreamVideos(playerVideos).forEach(function (video) {
         var stream = buildStream(video, displayTitle);
+        if (!stream) return;
         streams.push(stream);
         qualityCounts[stream.quality] = (qualityCounts[stream.quality] || 0) + 1;
       });
+      if (subtitleTracks.length) {
+        var safeSubtitles = subtitleTracks.filter(function (track) {
+          var url = typeof track === 'string' ? track : track && (track.url || track.file);
+          return validateStreamUrl(url);
+        });
+        if (safeSubtitles.length) streams.forEach(function (stream) {
+          stream.subtitles = safeSubtitles.slice();
+        });
+      }
       console.log('[STREAM QUALITY SUMMARY]', JSON.stringify(qualityCounts));
       var rawQualities = [];
       var seenQualities = new Set();
@@ -882,9 +1326,417 @@ function fetchStreams(type, id, suppliedMeta, deadline) {
       has2160p: null
     }));
     diagnostic(failureStage, code, type, id, error);
+    if (throwOnError) throw error;
     return { streams: [] };
   });
 }
+
+// Internet Archive adapter: only explicit Public Domain / CC0 records are eligible.
+// Search follows a Torrentio-inspired discovery pattern (multiple indexed queries,
+// candidate ranking, short negative cache) without requiring a separate backend.
+function normalize(value) {
+  return normalizeTitle(value);
+}
+
+function yearOf(value) {
+  const match = String(value || '').match(/\b(19|20)\d{2}\b/);
+  return match ? match[0] : '';
+}
+
+function titleSimilarity(left, right) {
+  const a = normalize(left);
+  const b = normalize(right);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.length > 8 && (b.indexOf(a + ' ') === 0 || a.indexOf(b + ' ') === 0)) return 0.86;
+  const aWords = Array.from(new Set(a.split(' ')));
+  const bWords = Array.from(new Set(b.split(' ')));
+  const common = aWords.filter(function (word) { return bWords.indexOf(word) !== -1; }).length;
+  return (2 * common) / (aWords.length + bWords.length);
+}
+
+function isPermittedLicense(metadata) {
+  const license = String(metadata && (metadata.licenseurl || metadata.license_url) || '').toLowerCase();
+  const rights = String(metadata && metadata.rights || '').toLowerCase();
+  return /creativecommons\.org\/publicdomain\/(?:mark|zero)\/1\.0/.test(license) ||
+    /public domain/.test(rights);
+}
+
+function qualityOf(filename) {
+  const match = String(filename || '').match(/(?:^|[._\s-])(2160|1440|1080|720|480|360)p(?:[._\s-]|$)/i);
+  return match ? match[1] + 'p' : 'Video';
+}
+
+const INTERNET_ARCHIVE_CACHE = new Map();
+const INTERNET_ARCHIVE_CACHE_MAX = 200;
+const INTERNET_ARCHIVE_CACHE_TTL_MS = 10 * 60 * 1000;
+const INTERNET_ARCHIVE_EMPTY_CACHE_TTL_MS = 45 * 1000;
+
+function createInternetArchiveProvider(options) {
+  const config = options || {};
+  const fetchImpl = config.fetch || (typeof fetch === 'function' ? fetch : null);
+  const maxResults = Math.max(1, Math.min(5, Number(config.maxResults) || 3));
+  const maxCandidates = Math.max(maxResults, Math.min(10, Number(config.maxCandidates) || 8));
+  const maxSearchQueries = Math.max(1, Math.min(5, Number(config.maxSearchQueries) || 4));
+  const logger = config.console || console;
+
+  function trace(stage, details) {
+    const payload = Object.assign({ stage: stage, provider: 'internet-archive' }, details || {});
+    const message = '[INTERNET ARCHIVE DIAGNOSTIC] ' + JSON.stringify(payload);
+    if (logger && typeof logger.error === 'function') logger.error(message);
+    else if (logger && typeof logger.warn === 'function') logger.warn(message);
+    else if (logger && typeof logger.log === 'function') logger.log(message);
+  }
+
+  async function getJson(url, deadline) {
+    ensureBudget(deadline, 'Internet Archive request');
+    if (!fetchImpl) throw new Error('Internet Archive fetch is unavailable');
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const remainingMs = Number.isFinite(deadline) ? deadline - Date.now() : Infinity;
+    if (remainingMs <= 0) throw new Error('Internet Archive request timeout');
+    let timer = null;
+    let timeoutPromise = null;
+    if (Number.isFinite(remainingMs) && typeof setTimeout === 'function') {
+      timeoutPromise = new Promise(function (_, reject) {
+        timer = setTimeout(function () {
+          if (controller) controller.abort();
+          reject(new Error('Internet Archive request timeout'));
+        }, Math.max(1, remainingMs));
+      });
+    }
+    const options = { headers: { Accept: 'application/json' } };
+    if (controller) options.signal = controller.signal;
+    let response;
+    try {
+      const work = Promise.resolve().then(function () { return fetchImpl(url, options); });
+      response = timeoutPromise ? await Promise.race([work, timeoutPromise]) : await work;
+    } finally { if (timer !== null) clearTimeout(timer); }
+    if (!response || !response.ok) throw new Error('Internet Archive HTTP ' + (response && response.status || 'error'));
+    const data = response.json ? await response.json() : JSON.parse(await response.text());
+    ensureBudget(deadline, 'Internet Archive response processing');
+    return data;
+  }
+
+  function getTitleVariants(meta, title) {
+    const values = [
+      title, meta.original_title, meta.original_name, meta.title,
+      meta.alternative_title, meta.alternate_title, meta.aka
+    ];
+    [meta.alternate_titles, meta.aliases, meta.alt_titles].forEach(function (list) {
+      if (Array.isArray(list)) values.push.apply(values, list);
+    });
+    const seen = new Set();
+    return values.map(function (value) { return String(value || '').trim(); })
+      .filter(function (value) {
+        const key = normalize(value);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, maxSearchQueries);
+  }
+
+  function cacheKey(type, variants, year) {
+    return 'movie|' + variants.map(normalize).sort().join('|') + '|' + (year || '');
+  }
+
+  function cacheResult(key, loader) {
+    const existing = INTERNET_ARCHIVE_CACHE.get(key);
+    if (existing && existing.expiresAt > Date.now()) {
+      trace('cache-hit', { cacheStatus: existing.streams.length ? 'hit' : 'negative-hit', streams: existing.streams.length });
+      return Promise.resolve(existing.streams.slice());
+    }
+    if (existing && existing.pending) {
+      trace('cache-hit', { cacheStatus: 'in-flight' });
+      return existing.pending.then(function (streams) { return streams.slice(); });
+    }
+    const entry = { expiresAt: 0, streams: [], pending: null };
+    entry.pending = Promise.resolve().then(loader).then(function (streams) {
+      entry.streams = Array.isArray(streams) ? streams.slice() : [];
+      entry.expiresAt = Date.now() + (entry.streams.length ? INTERNET_ARCHIVE_CACHE_TTL_MS : INTERNET_ARCHIVE_EMPTY_CACHE_TTL_MS);
+      entry.pending = null;
+      while (INTERNET_ARCHIVE_CACHE.size > INTERNET_ARCHIVE_CACHE_MAX) {
+        const oldestKey = INTERNET_ARCHIVE_CACHE.keys().next().value;
+        if (oldestKey === key && INTERNET_ARCHIVE_CACHE.size === 1) break;
+        INTERNET_ARCHIVE_CACHE.delete(oldestKey);
+      }
+      return entry.streams.slice();
+    }).catch(function (error) {
+      if (INTERNET_ARCHIVE_CACHE.get(key) === entry) INTERNET_ARCHIVE_CACHE.delete(key);
+      throw error;
+    });
+    INTERNET_ARCHIVE_CACHE.set(key, entry);
+    return entry.pending;
+  }
+
+  async function discoverCandidates(variants, year, deadline) {
+    const found = new Map();
+    const querySummaries = [];
+    const rawSampleDocs = [];
+    let rawResultCount = 0;
+    let missingIdentifierCount = 0;
+    let firstSearchShape = null;
+    const escaped = variants.map(function (value) {
+      return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    });
+    const requests = escaped.map(function (value, index) {
+      const query = 'mediatype:movies AND title:"' + value + '"';
+      const url = 'https://archive.org/advancedsearch.php?q=' + encodeURIComponent(query) +
+        '&fl[]=identifier&fl[]=title&fl[]=year&fl[]=licenseurl&fl[]=downloads&rows=25&page=1&output=json';
+      return getJson(url, deadline).then(function (search) {
+        const responseObject = search && search.response && typeof search.response === 'object' ? search.response : null;
+        const docs = responseObject && Array.isArray(responseObject.docs) ? responseObject.docs : [];
+        rawResultCount += docs.length;
+        if (rawSampleDocs.length < 5) rawSampleDocs.push.apply(rawSampleDocs, docs.slice(0, 5 - rawSampleDocs.length).map(function (doc) {
+          return { identifier: doc && doc.identifier ? String(doc.identifier) : null,
+            title: doc && doc.title ? String(doc.title) : null, year: doc && doc.year ? String(doc.year) : null };
+        }));
+        if (!firstSearchShape) firstSearchShape = {
+          topLevelKeys: search && typeof search === 'object' ? Object.keys(search).slice(0, 12) : [],
+          responseKeys: responseObject ? Object.keys(responseObject).slice(0, 16) : [],
+          docsFieldType: Array.isArray(responseObject && responseObject.docs) ? 'array' :
+            (responseObject && responseObject.docs == null ? 'missing-or-null' : typeof (responseObject && responseObject.docs)),
+          responseError: search && (search.error || search.errors || search.exception) ?
+            String(search.error || search.errors || search.exception).slice(0, 200) : null,
+          responseMessage: responseObject && (responseObject.message || responseObject.error) ?
+            String(responseObject.message || responseObject.error).slice(0, 200) : null
+        };
+        querySummaries.push({
+          queryIndex: index,
+          queryTitle: variants[index],
+          reportedTotal: responseObject && Number.isFinite(Number(responseObject.numFound)) ? Number(responseObject.numFound) : null,
+          rawResults: docs.length,
+          responseError: search && (search.error || search.errors || search.exception)
+            ? String(search.error || search.errors || search.exception).slice(0, 200) : null
+        });
+        docs.forEach(function (doc) {
+          if (!doc || !doc.identifier) { missingIdentifierCount += 1; return; }
+          const id = String(doc.identifier);
+          const previous = found.get(id);
+          const score = variants.reduce(function (best, variant) {
+            return Math.max(best, titleSimilarity(variant, doc.title));
+          }, 0);
+          const candidate = { doc: doc, score: score, queryIndex: index };
+          if (!previous || candidate.score > previous.score) found.set(id, candidate);
+        });
+      }).catch(function (error) {
+        querySummaries.push({
+          queryIndex: index,
+          queryTitle: variants[index],
+          rawResults: 0,
+          requestError: String(error && error.message || error).slice(0, 200)
+        });
+      });
+    });
+    await Promise.all(requests);
+    if (querySummaries.length && querySummaries.every(function (item) { return Boolean(item.requestError); })) {
+      throw new Error('All Internet Archive search queries failed');
+    }
+
+    const filtered = { missingIdentifier: missingIdentifierCount, titleMismatch: 0, yearMismatch: 0 };
+    const candidates = [];
+    const docs = Array.from(found.values());
+    docs.forEach(function (entry) {
+      const doc = entry.doc;
+      if (!doc || !doc.identifier) { filtered.missingIdentifier += 1; return; }
+      if (entry.score < 0.82) { filtered.titleMismatch += 1; return; }
+      const candidateYear = yearOf(doc.year);
+      if (year && candidateYear && candidateYear !== '1900' && year !== candidateYear) {
+        filtered.yearMismatch += 1;
+        return;
+      }
+      candidates.push({
+        doc: doc,
+        score: entry.score,
+        yearMatch: year && candidateYear === year ? 1 : 0,
+        downloads: Number(doc.downloads) || 0
+      });
+    });
+    candidates.sort(function (a, b) {
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.yearMatch !== a.yearMatch) return b.yearMatch - a.yearMatch;
+      return b.downloads - a.downloads;
+    });
+    trace('search-complete', {
+      queryCount: variants.length,
+      queries: querySummaries,
+      reportedTotal: querySummaries.reduce(function (sum, item) { return sum + (Number(item.reportedTotal) || 0); }, 0),
+      rawResults: rawResultCount,
+      searchShape: firstSearchShape,
+      sampleDocs: rawSampleDocs,
+      candidates: candidates.length,
+      filtered: filtered
+    });
+
+    const selected = candidates.slice(0, maxCandidates).map(function (entry) { return entry.doc; });
+    selected.rawResults = rawResultCount;
+    return selected;
+  }
+
+  async function loadStreams(input, title, variants, year) {
+    const startedAt = Date.now();
+    const deadline = Number.isFinite(input.deadline) ? input.deadline : Infinity;
+    const selectedCandidates = await discoverCandidates(variants, year, deadline);
+    const streams = [];
+    const rejected = {
+      metadataUnavailable: 0,
+      licenseNotPermitted: 0,
+      metadataTitleMismatch: 0,
+      metadataYearMismatch: 0,
+      noFiles: 0,
+      invalidFileName: 0,
+      unsupportedMedia: 0,
+      privateOrMetadataFile: 0,
+      invalidFileSize: 0
+    };
+    let metadataRecords = 0;
+    let filesInspected = 0;
+    let playableFiles = 0;
+
+    for (const doc of selectedCandidates) {
+      ensureBudget(deadline, 'Internet Archive metadata');
+      const metadataUrl = 'https://archive.org/metadata/' + encodeURIComponent(doc.identifier);
+      let record;
+      try {
+        record = await getJson(metadataUrl, deadline);
+        metadataRecords += 1;
+      } catch (error) {
+        rejected.metadataUnavailable += 1;
+        trace('metadata-error', { identifier: String(doc.identifier), recordsFetched: metadataRecords,
+          message: String(error && error.message || error).slice(0, 200) });
+        continue;
+      }
+      const metadata = record && record.metadata || {};
+      trace('metadata-inspected', { identifier: String(doc.identifier), metadataTitle: String(metadata.title || doc.title || ''), licensePresent: Boolean(metadata.licenseurl || metadata.license_url || metadata.rights), year: yearOf(metadata.year || metadata.date || doc.year) });
+      if (!isPermittedLicense(metadata)) { rejected.licenseNotPermitted += 1; trace('candidate-rejected', { identifier: String(doc.identifier), reason: 'license-not-permitted' }); continue; }
+      const metadataTitle = metadata.title || doc.title || '';
+      const metadataScore = variants.reduce(function (best, variant) {
+        return Math.max(best, titleSimilarity(variant, metadataTitle));
+      }, 0);
+      if (metadataScore < 0.82) { rejected.metadataTitleMismatch += 1; trace('candidate-rejected', { identifier: String(doc.identifier), reason: 'metadata-title-mismatch', titleScore: Number(metadataScore.toFixed(2)) }); continue; }
+      const recordYear = yearOf(metadata.year || metadata.date || doc.year);
+      if (year && recordYear && recordYear !== '1900' && year !== recordYear) {
+        rejected.metadataYearMismatch += 1;
+        trace('candidate-rejected', { identifier: String(doc.identifier), reason: 'metadata-year-mismatch', expectedYear: year, actualYear: recordYear });
+        continue;
+      }
+
+      const files = Array.isArray(record.files) ? record.files : [];
+      if (!files.length) rejected.noFiles += 1;
+      filesInspected += files.length;
+      const eligible = [];
+      files.forEach(function (file) {
+        if (!file || typeof file.name !== 'string' || /[\\/]/.test(file.name) || file.name.indexOf('..') !== -1) {
+          rejected.invalidFileName += 1;
+          return;
+        }
+        if (!/\.(?:mp4|m4v|webm|ogv)$/i.test(file.name)) {
+          rejected.unsupportedMedia += 1;
+          return;
+        }
+        if (file.source === 'metadata' || file.private === true || file.private === 'true') {
+          rejected.privateOrMetadataFile += 1;
+          return;
+        }
+        if (!(Number(file.size) > 0)) {
+          rejected.invalidFileSize += 1;
+          return;
+        }
+        eligible.push(file);
+      });
+      const playable = eligible.sort(function (a, b) {
+        return Number(b.size || 0) - Number(a.size || 0);
+      }).slice(0, 3);
+      playableFiles += playable.length;
+      playable.forEach(function (file) {
+        const quality = qualityOf(file.name);
+        const url = 'https://archive.org/download/' + encodeURIComponent(doc.identifier) + '/' + encodeURIComponent(file.name);
+        streams.push({
+          name: 'Internet Archive (' + title + ') ' + quality,
+          title: 'Internet Archive (' + title + ') ' + quality,
+          url: url,
+          quality: quality
+        });
+      });
+      if (streams.length >= 3) break;
+    }
+    const result = streams.slice(0, 3);
+    trace('complete', {
+      rawResults: Number(selectedCandidates.rawResults) || 0,
+      candidates: selectedCandidates.length,
+      metadataRecords: metadataRecords,
+      filesInspected: filesInspected,
+      playableFiles: playableFiles,
+      streams: result.length,
+      rejected: rejected,
+      elapsedMs: Date.now() - startedAt
+    });
+    return result;
+  }
+
+  async function getStreams(context) {
+    const input = context || {};
+    if (String(input.type || '').toLowerCase() !== 'movie') {
+      trace('skipped', { reason: 'unsupported-media-type', mediaType: String(input.type || 'unknown') });
+      return [];
+    }
+    const meta = input.meta || {};
+    const title = String(meta.name || meta.title || meta.original_name || '').trim();
+    if (!title) {
+      trace('skipped', { reason: 'missing-title' });
+      return [];
+    }
+    const year = yearOf(meta.year || meta.release_date);
+    const variants = getTitleVariants(meta, title);
+    const key = cacheKey('movie', variants, year);
+    trace('search-start', { year: year || null, queryCount: variants.length, maxCandidates: maxCandidates });
+    try {
+      return await cacheResult(key, function () { return loadStreams(input, title, variants, year); });
+    } catch (error) {
+      trace('error', { stage: 'search-or-metadata', message: String(error && error.message || error).slice(0, 250) });
+      throw error;
+    }
+  }
+
+  return {
+    id: 'internet-archive',
+    name: 'Internet Archive',
+    supports: function (context) {
+      return String(context && context.type || '').toLowerCase() === 'movie';
+    },
+    getStreams: getStreams
+  };
+}
+
+var ENABLE_INTERNET_ARCHIVE_PROVIDER = false;
+
+var cinemaBoxProviderEngine = createProviderEngine({
+  providers: [{
+    id: 'cinemabox',
+    name: 'CinemaBox',
+    priority: 100,
+    // Nuvio's embedded timer implementation can retain completed timers.
+    // fetchStreams enforces the shared deadline before each network stage.
+    skipTimeoutTimer: true,
+    getStreams: function (context) {
+      var adapterStartedAt = Date.now();
+      console.log('[ENGINE TRACE] adapter-start', 'at:', adapterStartedAt);
+      return fetchStreams(context.type, context.id, context.meta, context.deadline, true)
+        .then(function (result) {
+          console.log('[ENGINE TRACE] adapter-finish', 'elapsedMs:', Date.now() - adapterStartedAt, 'streams:', Array.isArray(result && result.streams) ? result.streams.length : 0);
+          return Array.isArray(result && result.streams) ? result.streams : [];
+        });
+    }
+  }, Object.assign(createInternetArchiveProvider(), {
+    priority: 50,
+    timeoutMs: 12000,
+    fallbackOnlyWhenEmpty: true,
+    enabled: ENABLE_INTERNET_ARCHIVE_PROVIDER
+  })],
+  maxConcurrency: 2,
+  providerTimeoutMs: PROVIDER_BUDGET_MS,
+  failureThreshold: 3,
+  cooldownMs: 10000
+});
 
 function getTmdbMetadata(tmdbId, mediaType, deadline) {
   var kind = (String(mediaType).toLowerCase() === 'tv' || String(mediaType).toLowerCase() === 'series') ? 'tv' : 'movie';
@@ -897,18 +1749,39 @@ function getTmdbMetadata(tmdbId, mediaType, deadline) {
 
   return cached('tmdb-meta-' + kind + '-' + tmdbId, function () {
     return requestWithRetry(url, deadline, 1).then(function (data) {
-      var imdbId = data.imdb_id || (data.external_ids && data.external_ids.imdb_id);
-      var name = data.title || data.name;
-      if (!imdbId || !name) throw new Error('TMDB metadata is incomplete for ' + tmdbId);
+      var name = data && (data.title || data.name);
+      if (!name) throw new Error('TMDB metadata is incomplete for ' + tmdbId);
 
-      return {
-        imdbId: imdbId,
-        meta: {
-          name: name,
-          original_name: data.original_title || data.original_name || name,
-          year: data.release_date || data.first_air_date || ''
-        }
-      };
+      var imdbId = data.imdb_id || (data.external_ids && data.external_ids.imdb_id);
+      if (imdbId) {
+        return {
+          imdbId: imdbId,
+          meta: {
+            name: name,
+            original_name: data.original_title || data.original_name || name,
+            year: data.release_date || data.first_air_date || ''
+          }
+        };
+      }
+
+      // Some TMDB responses omit external_ids from append_to_response.
+      // Retry the dedicated endpoint before abandoning this title.
+      var externalUrl = 'https://api.themoviedb.org/3/' + kind + '/' +
+        encodeURIComponent(String(tmdbId)) + '/external_ids?api_key=' + encodeURIComponent(key);
+      return requestWithRetry(externalUrl, deadline, 1).then(function (external) {
+        var resolvedImdbId = external && external.imdb_id;
+        // IMDb IDs are optional: CinemaBox can be searched by TMDB titles.
+        return {
+          imdbId: resolvedImdbId || null,
+          meta: {
+            name: name,
+            original_name: data.original_title || data.original_name || name,
+            year: data.release_date || data.first_air_date || '',
+            tmdbId: String(tmdbId),
+            mediaType: kind
+          }
+        };
+      });
     });
   }, METADATA_CACHE_TTL_MS);
 }
@@ -920,6 +1793,7 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
       ? input
       : { tmdbId: input, mediaType: mediaType, season: season, episode: episode };
 
+    requestHeadersByDeadline[deadline] = configureRequestHeaders(args);
     var rawType = String(args.mediaType || 'movie').toLowerCase();
     var oldType = rawType === 'tv' ? 'series' : rawType;
     var rawId = String(args.tmdbId || '').replace(/^imdb:/i, '');
@@ -946,25 +1820,83 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
     }
 
     function run(imdbId, meta) {
-      if (!imdbId) return [];
-      var id = imdbId;
+      // Prefer IMDb when available; otherwise preserve the TMDB identity so
+      // fetchStreams can search by the title metadata without Cinemeta.
+      var id = imdbId || ('tmdb:' + rawId);
       if (oldType === 'series') {
         if (args.season == null || args.episode == null) return [];
         id += ':' + Number(args.season) + ':' + Number(args.episode);
       }
-      return fetchStreams(oldType, id, meta, deadline).then(function (result) {
-        var streams = Array.isArray(result && result.streams) ? result.streams : [];
+      return cinemaBoxProviderEngine.getStreams({
+        type: oldType,
+        id: id,
+        meta: meta,
+        deadline: deadline
+      }).then(function (result) {
+        console.log('[ENGINE TRACE] entry-engine-result', 'elapsedMs:', Date.now() - requestStart, 'at:', Date.now());
+        var streams = result.streams.map(function (stream) {
+          // Preserve the exact public stream shape expected by Nuvio.
+          var mappedStream = {
+            name: stream.name,
+            title: stream.title,
+            url: stream.url,
+            quality: stream.quality
+          };
+          if (Array.isArray(stream.subtitles) && stream.subtitles.length) {
+            mappedStream.subtitles = stream.subtitles.slice();
+          }
+          return mappedStream;
+        });
+        var providerHealth = cinemaBoxProviderEngine.getHealth();
+        console.log('[PROVIDER ENGINE]', JSON.stringify({
+          providers: result.providers.map(function (provider) {
+            var health = providerHealth[provider.providerId] || {};
+            return {
+              id: provider.providerId,
+              status: provider.status,
+              streams: provider.streams.length,
+              rawStreams: provider.rawStreams == null ? 0 : provider.rawStreams,
+              rejectedStreams: provider.rejectedStreams == null ? 0 : provider.rejectedStreams,
+              rejectionReasons: provider.rejectionReasons || {},
+              elapsedMs: provider.elapsedMs == null ? null : provider.elapsedMs,
+              attempts: health.attempts == null ? 0 : health.attempts,
+              successes: health.successes == null ? 0 : health.successes,
+              productiveRate: health.productiveRate,
+              emptyResponses: health.emptyResponses == null ? 0 : health.emptyResponses,
+              errorCount: health.errorCount == null ? 0 : health.errorCount,
+              timeoutCount: health.timeoutCount == null ? 0 : health.timeoutCount,
+              rejectedStreams: health.rejectedStreams == null ? 0 : health.rejectedStreams,
+              validStreams: health.validStreams == null ? 0 : health.validStreams,
+              latencyEwmaMs: health.latencyEwmaMs,
+              lastStatus: health.lastStatus || provider.status,
+              circuitOpen: health.circuitOpen === true,
+              retryAt: health.retryAt
+            };
+          }),
+          totalStreams: streams.length
+        }));
         console.log('[TIMING] getStreams total:', Date.now() - requestStart, 'ms');
         return streams;
       });
     }
 
+    var suppliedMeta = args.meta && typeof args.meta === 'object' &&
+      (args.meta.name || args.meta.title || args.meta.original_name) ? args.meta : null;
+    if (!suppliedMeta && (args.title || args.name || args.originalTitle || args.original_name)) {
+      suppliedMeta = {
+        name: args.title || args.name || args.original_name || args.originalTitle,
+        original_name: args.originalTitle || args.original_name || args.title || args.name,
+        year: args.year || args.releaseDate || args.release_date || ''
+      };
+    }
     if (/^tt\d+$/i.test(rawId)) {
+      if (suppliedMeta) return run(rawId, suppliedMeta);
       return getExternalMeta(oldType, rawId, deadline).then(function (meta) {
         return run(rawId, meta);
       });
     }
-
+    // Use metadata already supplied by Nuvio when TMDB authentication is unavailable.
+    if (suppliedMeta) return run(null, suppliedMeta);
     var tmdbStart = Date.now();
     ensureBudget(deadline, 'TMDB metadata');
     return getTmdbMetadata(rawId, rawType, deadline).then(function (resolved) {
@@ -985,6 +1917,8 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
   }).catch(function (error) {
     diagnostic('entry', 'UNEXPECTED_ERROR', 'unknown', 'unknown', error);
     return [];
+  }).finally(function () {
+    delete requestHeadersByDeadline[deadline];
   });
 }
 

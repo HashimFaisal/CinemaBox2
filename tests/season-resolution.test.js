@@ -48,7 +48,7 @@ test('public Nuvio entry point resolves season zero specials and preserves all t
       }));
     }
 
-    if (url.includes('/shows/shows/dynamic/77?season_id=specials-id')) {
+    if (url.includes('/shows/seasons/player/specials-id')) {
       return Promise.resolve(response({
         post_info: { season_number: 0 },
         sections: [{
@@ -90,7 +90,7 @@ test('public Nuvio entry point resolves season zero specials and preserves all t
   assert.deepEqual(Array.from(streams, stream => stream.quality), ['1080p', '720p', '480p']);
   assert.equal(streams.length, 3);
   assert.ok(streams.every(stream => /S00E01/.test(stream.title)));
-  assert.ok(requests.some(url => url.includes('season_id=specials-id')));
+  assert.ok(requests.some(url => url.includes('/shows/seasons/player/specials-id')));
   assert.ok(requests.some(url => url.includes('/player/special-episode-1')));
 });
 
@@ -135,7 +135,7 @@ test('season zero can be selected by an explicit Season 0 card title', async () 
 
   assert.equal(await api.findEpisode(details, 'show-1', 0, 3), 'special-3');
   assert.equal(requests.length, 1);
-  assert.match(requests[0], /season_id=season-zero-id/);
+  assert.ok(requests[0].includes('/shows/seasons/player/season-zero-id'));
 });
 
 test('a season-specific response for the wrong season is rejected', async () => {
@@ -215,7 +215,7 @@ test('missing season metadata is not interpreted as season zero', async () => {
 
   assert.equal(await api.findEpisode(details, 'show-1', 0, 1), 'special-1');
   assert.equal(requests.length, 1);
-  assert.match(requests[0], /season_id=specials-id/);
+  assert.ok(requests[0].includes('/shows/seasons/player/specials-id'));
 });
 
 test('external episode IDs retain season zero as a real numeric season', () => {
