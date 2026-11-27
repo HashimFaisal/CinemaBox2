@@ -985,11 +985,20 @@ function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
 }
 
 function findEpisodeFromSeasonDetails(sd, seasonNumber, episodeNumber) {
+  var rawSeason = sd && sd.post_info && sd.post_info.season_number;
+  if (rawSeason != null && rawSeason !== '' && Number(rawSeason) !== seasonNumber) return null;
   var episodes = sd && sd.sections && sd.sections[0] && sd.sections[0].data || [];
   for (var i = 0; i < episodes.length; i++) {
     var item = episodes[i];
-    var number = Number(item.episode_number != null ? item.episode_number :
-      (item.episodeNumber != null ? item.episodeNumber : item.description));
+    var rawNumber = item.episode_number != null ? item.episode_number :
+      (item.episodeNumber != null ? item.episodeNumber : item.description);
+    var number = Number(rawNumber);
+    if (!Number.isSafeInteger(number) || number < 1) {
+      var description = String(item.description == null ? '' : item.description).trim();
+      var labelled = description.match(/\\b(?:episode|ep|e|special)\\s*0*(\\d+)\\b/i) ||
+        description.match(/\\bs\\s*0*\\d+\\s*e\\s*0*(\\d+)\\b/i);
+      number = labelled ? Number(labelled[1]) : NaN;
+    }
     var itemSeason = item.seasonNumber != null ? Number(item.seasonNumber) :
       (item.season_number != null ? Number(item.season_number) : seasonNumber);
     if (itemSeason === seasonNumber && number === episodeNumber) return item.id;
