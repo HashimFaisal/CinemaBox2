@@ -54,8 +54,7 @@ var createProviderEngine = (function () {
       providerId: provider.id
     };
     if (stream.language) output.language = String(stream.language);
-    if (Array.isArray(stream.subtitles) && stream.subtitles.length) output.subtitles = stream.subtitles.slice();
-    if (Number.isFinite(Number(stream.sizeBytes)) && Number(stream.sizeBytes) > 0) output.sizeBytes = Number(stream.sizeBytes);
+      if (Number.isFinite(Number(stream.sizeBytes)) && Number(stream.sizeBytes) > 0) output.sizeBytes = Number(stream.sizeBytes);
     if (Number.isFinite(Number(stream.seeders)) && Number(stream.seeders) >= 0) output.seeders = Number(stream.seeders);
     return output;
   }
@@ -1261,7 +1260,6 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
       if (playerVideos.length === 0) {
         diagnostic('player', 'PLAYER_EMPTY', type, id);
       }
-      var subtitleTracks = Array.isArray(player.subtitles) ? player.subtitles : [];
       if (player.parental_access != null) {
         console.log('[PLAYER ACCESS]', 'parentalAccessFieldPresent:', true);
       }
@@ -1284,15 +1282,6 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
         streams.push(stream);
         qualityCounts[stream.quality] = (qualityCounts[stream.quality] || 0) + 1;
       });
-      if (subtitleTracks.length) {
-        var safeSubtitles = subtitleTracks.filter(function (track) {
-          var url = typeof track === 'string' ? track : track && (track.url || track.file);
-          return validateStreamUrl(url);
-        });
-        if (safeSubtitles.length) streams.forEach(function (stream) {
-          stream.subtitles = safeSubtitles.slice();
-        });
-      }
       console.log('[STREAM QUALITY SUMMARY]', JSON.stringify(qualityCounts));
       var rawQualities = [];
       var seenQualities = new Set();
@@ -1858,9 +1847,6 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
             url: stream.url,
             quality: stream.quality
           };
-          if (Array.isArray(stream.subtitles) && stream.subtitles.length) {
-            mappedStream.subtitles = stream.subtitles.slice();
-          }
           return mappedStream;
         });
         var providerHealth = cinemaBoxProviderEngine.getHealth();
