@@ -430,23 +430,10 @@ function request(url, deadline) {
   var requestStart = Date.now();
   var timingLogged = false;
   var requestLabel = 'unknown';
-  var controller = typeof AbortController === 'function' ? new AbortController() : null;
-  var timer = null;
-  var timeoutPromise = null;
   try {
     var parsedUrl = new URL(url);
     requestLabel = parsedUrl.hostname + parsedUrl.pathname;
   } catch (error) { requestLabel = 'invalid-url'; }
-  if (Number.isFinite(deadline) && typeof setTimeout === 'function') {
-    var remainingMs = Math.max(0, deadline - Date.now());
-    if (remainingMs <= 0) throw new Error('CinemaBox request timeout before fetch');
-    timeoutPromise = new Promise(function (_, reject) {
-      timer = setTimeout(function () {
-        if (controller) controller.abort();
-        reject(new Error('CinemaBox request timeout'));
-      }, remainingMs);
-    });
-  }
   var requestOrigin = 'https://cinema.albox.co';
   try { requestOrigin = new URL(url).origin; } catch (_) {}
   var headers = Object.assign({
@@ -456,10 +443,14 @@ function request(url, deadline) {
     'Origin': requestOrigin,
     'Accept-Language': 'en-US,en;q=0.9'
   }, requestHeadersByDeadline[deadline] || {});
-  var options = { headers: headers };
-  if (controller) options.signal = controller.signal;
-  var work = Promise.resolve().then(function () { return fetch(url, options); }).then(function (response) {
+
+  // Nuvio's embedded timer implementation can retain cleared timeout handles
+  // and keep a completed scraper invocation alive until the 45s deadline.
+  // Enforce the shared budget at request/stage boundaries without scheduling
+  // a per-request timer; this mirrors the timer-free embedded provider engine.
+  return fetch(url, { headers: headers }).then(function (response) {
     return response.text().then(function (body) {
+      ensureBudget(deadline, 'HTTP response body');
       timingLogged = true;
       console.log('[HTTP TIMING]', requestLabel, 'status:', response.status,
         'ms:', Date.now() - requestStart, 'bytes:', body.length);
@@ -467,13 +458,10 @@ function request(url, deadline) {
       try { return JSON.parse(body); }
       catch (e) { throw new Error('Invalid JSON from ' + redactSensitive(url) + ': ' + redactSensitive(body.slice(0, 300))); }
     });
-  });
-  var pending = timeoutPromise ? Promise.race([work, timeoutPromise]) : work;
-  return pending.catch(function (error) {
-    if (controller && controller.signal && controller.signal.aborted) throw new Error('CinemaBox request timeout');
+  }).catch(function (error) {
     if (!timingLogged) console.log('[HTTP TIMING]', requestLabel, 'status: failed', 'ms:', Date.now() - requestStart);
     throw error;
-  }).finally(function () { if (timer !== null) clearTimeout(timer); });
+  });
 }
 
 function requestWithRetry(url, deadline, maxRetries) {
