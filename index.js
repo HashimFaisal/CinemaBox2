@@ -283,7 +283,7 @@ function configureRequestHeaders(args) {
 
 function shouldTryFallbackHost(error) {
   var message = String(error && error.message || error);
-  return /HTTP (?:408|425|429|500|502|503|504)\\b/.test(message) ||
+  return /HTTP (?:408|425|429|500|502|503|504)\b/.test(message) ||
     /network|fetch failed|timeout|timed out|ECONN|ENOTFOUND|EAI_AGAIN/i.test(message);
 }
 
@@ -510,8 +510,8 @@ function api(path, deadline) {
       if (fallbackIndex >= FALLBACK_BASES.length) throw primaryError;
       var fallbackUrl = FALLBACK_BASES[fallbackIndex++] + '/' + path;
       console.log('[API HOST FALLBACK]', 'host:', fallbackUrl.split('/')[2],
-        'reason:', /HTTP \\d+/.test(String(primaryError.message || primaryError))
-          ? String(primaryError.message).match(/HTTP \\d+/)[0] : 'network');
+        'reason:', /HTTP \d+/.test(String(primaryError.message || primaryError))
+          ? String(primaryError.message).match(/HTTP \d+/)[0] : 'network');
       return requestWithRetry(fallbackUrl, deadline, 0).catch(function (fallbackError) {
         if (shouldTryFallbackHost(fallbackError)) return tryNext();
         throw fallbackError;
