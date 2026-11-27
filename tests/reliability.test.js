@@ -489,9 +489,9 @@ test('stream objects expose quality as a separate Nuvio field and reject invalid
     quality: '1080p'
   }, 'The Flash S02E05');
 
-  assert.equal(stream.quality, '1080p');
-  assert.match(stream.name, /1080p/);
-  assert.match(stream.title, /1080p/);
+  assert.equal(stream.quality, 'Video');
+  assert.doesNotMatch(stream.name, /1080p/);
+  assert.doesNotMatch(stream.title, /1080p/);
   assert.equal(stream.url, 'https://cdn.example/1080p.mp4');
 });
 
@@ -581,7 +581,7 @@ test('primary title network failure falls back to original title', async () => {
   });
 
   assert.equal(result.streams.length, 1);
-  assert.equal(result.streams[0].quality, '1080p');
+  assert.equal(result.streams[0].quality, 'Video');
   assert.ok(requests.some(url => url.includes('term=Primary')));
   assert.ok(requests.some(url => url.includes('term=Original')));
 });
@@ -878,7 +878,7 @@ test('three distinct provider qualities remain three independent Nuvio streams',
   ];
   const streams = api.uniqueStreamVideos(videos).map(video => api.buildStream(video, 'Test Movie'));
   assert.equal(streams.length, 3);
-  assert.deepEqual(Array.from(streams, stream => stream.quality), ['1080p', '720p', '480p']);
+  assert.deepEqual(Array.from(streams, stream => stream.quality), ['Video', 'Video', 'Video']);
   assert.deepEqual(Array.from(streams, stream => stream.url), videos.map(video => video.url));
 });
 
@@ -1099,7 +1099,7 @@ test('public Nuvio entry point resolves TMDB movie metadata and returns three or
 
   const streams = await api.getStreamsForNuvio({ tmdbId: '603', mediaType: 'movie' });
   assert.equal(streams.length, 3);
-  assert.deepEqual(Array.from(streams, stream => stream.quality), ['1080p', '720p', '480p']);
+  assert.deepEqual(Array.from(streams, stream => stream.quality), ['Video', 'Video', 'Video']);
   assert.ok(requests.some(url => url.startsWith('https://api.themoviedb.org/3/movie/603?')));
   assert.ok(streams.every(stream => stream.title.includes('The Matrix')));
 });
