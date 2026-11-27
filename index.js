@@ -1547,18 +1547,39 @@ function getTmdbMetadata(tmdbId, mediaType, deadline) {
 
   return cached('tmdb-meta-' + kind + '-' + tmdbId, function () {
     return requestWithRetry(url, deadline, 1).then(function (data) {
-      var imdbId = data.imdb_id || (data.external_ids && data.external_ids.imdb_id);
-      var name = data.title || data.name;
-      if (!imdbId || !name) throw new Error('TMDB metadata is incomplete for ' + tmdbId);
+      var name = data && (data.title || data.name);
+      if (!name) throw new Error('TMDB metadata is incomplete for ' + tmdbId);
 
-      return {
-        imdbId: imdbId,
-        meta: {
-          name: name,
-          original_name: data.original_title || data.original_name || name,
-          year: data.release_date || data.first_air_date || ''
+      var imdbId = data.imdb_id || (data.external_ids && data.external_ids.imdb_id);
+      if (imdbId) {
+        return {
+          imdbId: imdbId,
+          meta: {
+            name: name,
+            original_name: data.original_title || data.original_name || name,
+            year: data.release_date || data.first_air_date || ''
+          }
+        };
+      }
+
+      // Some TMDB responses omit external_ids from append_to_response.
+      // Retry the dedicated endpoint before abandoning this title.
+      var externalUrl = 'https://api.themoviedb.org/3/' + kind + '/' +
+        encodeURIComponent(String(tmdbId)) + '/external_ids?api_key=' + encodeURIComponent(key);
+      return requestWithRetry(externalUrl, deadline, 1).then(function (external) {
+        var resolvedImdbId = external && external.imdb_id;
+        if (!resolvedImdbId) {
+          throw new Error('TMDB IMDb ID is missing for ' + kind + '/' + tmdbId);
         }
-      };
+        return {
+          imdbId: resolvedImdbId,
+          meta: {
+            name: name,
+            original_name: data.original_title || data.original_name || name,
+            year: data.release_date || data.first_air_date || ''
+          }
+        };
+      });
     });
   }, METADATA_CACHE_TTL_MS);
 }
