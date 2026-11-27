@@ -1160,13 +1160,167 @@ function resolveImdbId(id, mediaType, deadline) {
       });
   });
 }
-function buildStream(video, displayTitle) {
+const VIDEO_PROBE_CACHE_TTL_MS = 300000;
+const VIDEO_PROBE_HEAD_BYTES = 512 * 1024;
+const VIDEO_PROBE_TAIL_BYTES = 2 * 1024 * 1024;
+
+function videoQualityFromDimensions(width, height) {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  if (width >= 3800 || height >= 2100) return '2160p';
+  if (width >= 2500 || height >= 1350) return '1440p';
+  if (width >= 1900 || height >= 1000) return '1080p';
+  if (width >= 1250 || height >= 700) return '720p';
+  if (width >= 850 || height >= 450) return '480p';
+  return '360p';
+}
+
+function parseMp4MovieHeader(buffer) {
+  var view = new DataView(buffer);
+  var result = { width: null, height: null, duration: null };
+  var containers = { moov: true, trak: true, mdia: true, minf: true, stbl: true, edts: true, dinf: true };
+  function readBoxRange(start, end, depth) {
+    if (depth > 8) return;
+    var offset = start;
+    while (offset + 8 <= end) {
+      var size = view.getUint32(offset);
+      var type = String.fromCharCode(view.getUint8(offset + 4), view.getUint8(offset + 5),
+        view.getUint8(offset + 6), view.getUint8(offset + 7));
+      var headerSize = 8;
+      if (size === 1) {
+        if (offset + 16 > end || view.getUint32(offset + 8) !== 0) return;
+        size = view.getUint32(offset + 12);
+        headerSize = 16;
+      } else if (size === 0) {
+        size = end - offset;
+      }
+      if (size < headerSize || offset + size > end) return;
+      var payload = offset + headerSize;
+      var boxEnd = offset + size;
+      if (type === 'tkhd' && payload + 8 <= boxEnd) {
+        var version = view.getUint8(payload);
+        var dimensionOffset = version === 1 ? 88 : 76;
+        if (payload + dimensionOffset + 8 <= boxEnd) {
+          var w = view.getUint32(payload + dimensionOffset) / 65536;
+          var h = view.getUint32(payload + dimensionOffset + 4) / 65536;
+          if (w > 0 && h > 0 && w <= 10000 && h <= 10000) {
+            result.width = Math.round(w);
+            result.height = Math.round(h);
+          }
+        }
+      } else if (type === 'mvhd' && payload + 20 <= boxEnd) {
+        var mvhdVersion = view.getUint8(payload);
+        var timescaleOffset = mvhdVersion === 1 ? 20 : 12;
+        var durationOffset = mvhdVersion === 1 ? 24 : 16;
+        if (payload + durationOffset + (mvhdVersion === 1 ? 8 : 4) <= boxEnd) {
+          var timescale = view.getUint32(payload + timescaleOffset);
+          var duration = mvhdVersion === 1
+            ? (view.getUint32(payload + durationOffset) === 0 ? view.getUint32(payload + durationOffset + 4) : 0)
+            : view.getUint32(payload + durationOffset);
+          if (timescale > 0 && duration > 0) result.duration = duration / timescale;
+        }
+      }
+      if (containers[type]) readBoxRange(payload, boxEnd, depth + 1);
+      offset = boxEnd;
+    }
+  }
+  // Locate a complete moov atom in this bounded range before walking its children.
+  var offset = 0;
+  while (offset + 8 <= view.byteLength) {
+    var size = view.getUint32(offset);
+    var type = String.fromCharCode(view.getUint8(offset + 4), view.getUint8(offset + 5),
+      view.getUint8(offset + 6), view.getUint8(offset + 7));
+    var headerSize = 8;
+    if (size === 1) {
+      if (offset + 16 > view.byteLength || view.getUint32(offset + 8) !== 0) break;
+      size = view.getUint32(offset + 12);
+      headerSize = 16;
+    } else if (size === 0) {
+      size = view.byteLength - offset;
+    }
+    if (size < headerSize || offset + size > view.byteLength) break;
+    if (type === 'moov') {
+      readBoxRange(offset + headerSize, offset + size, 0);
+      return result.width && result.height ? result : null;
+    }
+    offset += size;
+  }
+  return null;
+}
+
+function fetchVideoRange(url, start, end, deadline) {
+  ensureBudget(deadline, 'video source range probe');
+  var remainingMs = Number.isFinite(deadline) ? deadline - Date.now() : Infinity;
+  var options = { headers: { Range: 'bytes=' + start + '-' + end } };
+  if (Number.isFinite(remainingMs) && typeof AbortSignal !== 'undefined' &&
+      typeof AbortSignal.timeout === 'function') {
+    options.signal = AbortSignal.timeout(Math.max(1, Math.floor(remainingMs)));
+  }
+  return fetch(url, options).then(function (response) {
+    if (response.status !== 206) {
+      if (response.body && typeof response.body.cancel === 'function') response.body.cancel();
+      throw new Error('Video source did not honor byte range (HTTP ' + response.status + ')');
+    }
+    var declaredLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > VIDEO_PROBE_TAIL_BYTES) {
+      if (response.body && typeof response.body.cancel === 'function') response.body.cancel();
+      throw new Error('Video source range exceeded probe limit');
+    }
+    return response.arrayBuffer();
+  });
+}
+
+function probeVideoSource(url, deadline) {
+  return cached('video-probe-' + url, function () {
+    ensureBudget(deadline, 'video source HEAD probe');
+    var remainingMs = Number.isFinite(deadline) ? deadline - Date.now() : Infinity;
+    var headOptions = { method: 'HEAD' };
+    if (Number.isFinite(remainingMs) && typeof AbortSignal !== 'undefined' &&
+        typeof AbortSignal.timeout === 'function') {
+      headOptions.signal = AbortSignal.timeout(Math.max(1, Math.floor(remainingMs)));
+    }
+    return fetch(url, headOptions).then(function (head) {
+      if (!head.ok) throw new Error('Video source HEAD returned HTTP ' + head.status);
+      var sizeBytes = Number(head.headers.get('content-length'));
+      if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) sizeBytes = null;
+      var contentType = head.headers.get('content-type') || '';
+      return fetchVideoRange(url, 0, VIDEO_PROBE_HEAD_BYTES - 1, deadline).then(function (firstRange) {
+        var metadata = parseMp4MovieHeader(firstRange);
+        if (metadata) return metadata;
+        if (!sizeBytes || sizeBytes <= VIDEO_PROBE_HEAD_BYTES) return null;
+        var tailStart = Math.max(0, sizeBytes - VIDEO_PROBE_TAIL_BYTES);
+        return fetchVideoRange(url, tailStart, sizeBytes - 1, deadline).then(function (tailRange) {
+          return parseMp4MovieHeader(tailRange);
+        });
+      }).then(function (metadata) {
+        if (!metadata) return null;
+        return {
+          width: metadata.width,
+          height: metadata.height,
+          duration: metadata.duration,
+          sizeBytes: sizeBytes,
+          contentType: contentType
+        };
+      });
+    });
+  }, VIDEO_PROBE_CACHE_TTL_MS).catch(function (error) {
+    console.log('[VIDEO SOURCE PROBE]', 'status: unavailable', 'reason:', redactSensitive(error && error.message || error));
+    return null;
+  });
+}
+
+function buildStream(video, displayTitle, sourceInfo) {
   if (!video || !validateStreamUrl(video.url)) return null;
-  var quality = normalizeQuality(video.quality);
+  var quality = sourceInfo
+    ? (videoQualityFromDimensions(sourceInfo.width, sourceInfo.height) || normalizeQuality(video.quality))
+    : normalizeQuality(video.quality);
   var streamLabel = 'CinemaBox (' + displayTitle + ') ' + quality;
+  var sourceDetails = sourceInfo
+    ? ' • ' + sourceInfo.width + 'x' + sourceInfo.height +
+      (sourceInfo.sizeBytes ? ' • ' + (sourceInfo.sizeBytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB' : '')
+    : '';
   var output = {
     name: streamLabel,
-    title: streamLabel,
+    title: streamLabel + sourceDetails,
     url: video.url,
     quality: quality
   };
@@ -1325,17 +1479,24 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
           'quality:', quality);
       });
       var subtitlePreferenceCounts = { clean: 0, unknown: 0, hardcoded: 0 };
-      uniqueStreamVideos(playerVideos).forEach(function (video) {
-        var stream = buildStream(video, displayTitle);
-        if (!stream) return;
-        var preferenceRank = subtitlePreferenceRank(video);
-        Object.defineProperty(stream, '_subtitlePreferenceRank', {
-          value: preferenceRank, enumerable: false, configurable: true
+      var uniqueVideos = uniqueStreamVideos(playerVideos);
+      // Probe at most three source URLs to keep startup cost bounded.
+      var probeVideos = uniqueVideos.slice(0, 3);
+      return Promise.all(probeVideos.map(function (video) {
+        return probeVideoSource(video.url, deadline);
+      })).then(function (sourceInfos) {
+        uniqueVideos.forEach(function (video, index) {
+          var sourceInfo = index < sourceInfos.length ? sourceInfos[index] : null;
+          var stream = buildStream(video, displayTitle, sourceInfo);
+          if (!stream) return;
+          var preferenceRank = subtitlePreferenceRank(video);
+          Object.defineProperty(stream, '_subtitlePreferenceRank', {
+            value: preferenceRank, enumerable: false, configurable: true
+          });
+          subtitlePreferenceCounts[preferenceRank === 0 ? 'clean' : (preferenceRank === 2 ? 'hardcoded' : 'unknown')] += 1;
+          streams.push(stream);
+          qualityCounts[stream.quality] = (qualityCounts[stream.quality] || 0) + 1;
         });
-        subtitlePreferenceCounts[preferenceRank === 0 ? 'clean' : (preferenceRank === 2 ? 'hardcoded' : 'unknown')] += 1;
-        streams.push(stream);
-        qualityCounts[stream.quality] = (qualityCounts[stream.quality] || 0) + 1;
-      });
       // Subtitle cleanliness takes precedence; resolution remains the tie-breaker.
       // This does not inspect video pixels and never guesses when metadata is absent.
       streams.sort(function (a, b) {
@@ -1381,6 +1542,7 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
         'rawVideos:', playerVideos.length, 'uniqueValid:', streams.length,
         'total:', Date.now() - timingStart, 'ms');
       return { streams: streams };
+      });
     });
   })
   .catch(function (error) {
