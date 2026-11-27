@@ -198,9 +198,9 @@ test('bundled entrypoint uses the dedicated season-player API and forwards suppl
 test('bundled entrypoint retries the secondary API host after primary host transport failure', async function () {
   const result = await runPlugin(function (url) {
     if (url.startsWith('https://cinema.albox.co/api/v4/search?')) {
-      return response({ error: 'primary host unavailable' }).then ? Promise.resolve({
+      return Promise.resolve({
         ok: false, status: 503, text: async function () { return 'upstream unavailable'; }
-      }) : response({ results: [] });
+      });
     }
     if (url.startsWith('https://pucinema.albox.co/api/v4/search?')) {
       return response({ results: [] });
