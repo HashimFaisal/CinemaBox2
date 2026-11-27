@@ -1161,6 +1161,8 @@ function resolveImdbId(id, mediaType, deadline) {
   });
 }
 const VIDEO_PROBE_CACHE_TTL_MS = 300000;
+// Keep source inspection bounded so it cannot noticeably delay Nuvio's source list.
+const VIDEO_PROBE_TIMEOUT_MS = 1800;
 const VIDEO_PROBE_HEAD_BYTES = 512 * 1024;
 const VIDEO_PROBE_TAIL_BYTES = 2 * 1024 * 1024;
 
@@ -1324,9 +1326,10 @@ function probeVideoSource(url, deadline) {
 
 function buildStream(video, displayTitle, sourceInfo) {
   if (!video || !validateStreamUrl(video.url)) return null;
+  // Quality is read from the actual video file only; never trust the API's label.
   var quality = sourceInfo
-    ? (videoQualityFromDimensions(sourceInfo.width, sourceInfo.height) || normalizeQuality(video.quality))
-    : normalizeQuality(video.quality);
+    ? (videoQualityFromDimensions(sourceInfo.width, sourceInfo.height) || 'Video')
+    : 'Video';
   var streamLabel = 'CinemaBox (' + displayTitle + ') ' + quality;
   var sourceDetails = sourceInfo
     ? ' • ' + sourceInfo.width + 'x' + sourceInfo.height +
@@ -1495,10 +1498,12 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
       });
       var subtitlePreferenceCounts = { clean: 0, unknown: 0, hardcoded: 0 };
       var uniqueVideos = uniqueStreamVideos(playerVideos);
-      // Probe at most three source URLs to keep startup cost bounded.
+      // Probe up to three sources in parallel, but cap the total wait to 1.8 seconds.
+      // A slow or non-cooperative host must not hold up the source list.
       var probeVideos = uniqueVideos.slice(0, 3);
+      var probeDeadline = Math.min(deadline, Date.now() + VIDEO_PROBE_TIMEOUT_MS);
       return Promise.all(probeVideos.map(function (video) {
-        return probeVideoSource(video.url, deadline);
+        return probeVideoSource(video.url, probeDeadline);
       })).then(function (sourceInfos) {
         uniqueVideos.forEach(function (video, index) {
           var sourceInfo = index < sourceInfos.length ? sourceInfos[index] : null;
