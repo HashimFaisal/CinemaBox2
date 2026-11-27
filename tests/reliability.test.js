@@ -631,7 +631,7 @@ test('missing initial season metadata forces an explicit season fetch', async ()
   const episodeId = await api.findEpisode(initialDetails, 'show-123', 3, 1);
   assert.equal(episodeId, 'episode-301');
   assert.equal(requests.length, 1, 'unknown initial season must not be assumed to be season 1');
-  assert.match(requests[0], /season_id=season-3-id/);
+  assert.ok(requests[0].includes('/shows/seasons/player/season-3-id'));
 });
 
 test('mixed numbered and unnumbered episode cards never use positional fallback', async () => {
