@@ -57,6 +57,11 @@ var createProviderEngine = (function () {
     if (Array.isArray(stream.subtitles) && stream.subtitles.length) output.subtitles = stream.subtitles.slice();
     if (Number.isFinite(Number(stream.sizeBytes)) && Number(stream.sizeBytes) > 0) output.sizeBytes = Number(stream.sizeBytes);
     if (Number.isFinite(Number(stream.seeders)) && Number(stream.seeders) >= 0) output.seeders = Number(stream.seeders);
+    if (Number.isFinite(Number(stream._subtitlePreferenceRank))) {
+      Object.defineProperty(output, '_subtitlePreferenceRank', {
+        value: Number(stream._subtitlePreferenceRank), enumerable: false, configurable: true
+      });
+    }
     return output;
   }
   
@@ -213,6 +218,10 @@ var createProviderEngine = (function () {
         streams.push(stream);
       }));
       streams.sort((a, b) => {
+        const subtitleRankA = Number.isFinite(Number(a._subtitlePreferenceRank)) ? Number(a._subtitlePreferenceRank) : 1;
+        const subtitleRankB = Number.isFinite(Number(b._subtitlePreferenceRank)) ? Number(b._subtitlePreferenceRank) : 1;
+        const subtitleDifference = subtitleRankA - subtitleRankB;
+        if (subtitleDifference) return subtitleDifference;
         const rank = qualityRank(b.quality) - qualityRank(a.quality);
         if (rank) return rank;
         const pa = providers.find(item => item.id === a.providerId);
@@ -254,6 +263,13 @@ var createProviderEngine = (function () {
   
   return createProviderEngine;
 })();
+
+// Shared quality ranking for the bundled provider and the CinemaBox adapter.
+function qualityRank(value) {
+  var normalized = normalizeQuality(value);
+  var match = normalized.match(/^(\\d{3,4})p/i);
+  return match ? Number(match[1]) : -1;
+}
 
 const BASE = 'https://cinema.albox.co/api/v4';
 const FALLBACK_BASES = ['https://pucinema.albox.co/api/v4'];
@@ -1327,7 +1343,6 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
         if (subtitleRank) return subtitleRank;
         return qualityRank(b.quality) - qualityRank(a.quality);
       });
-      streams.forEach(function (stream) { delete stream._subtitlePreferenceRank; });
       if (subtitleTracks.length) {
         var safeSubtitles = subtitleTracks.filter(function (track) {
           var url = typeof track === 'string' ? track : track && (track.url || track.file);
