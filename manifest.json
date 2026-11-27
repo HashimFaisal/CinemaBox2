@@ -1,8 +1,8 @@
 {
-  "id": "cinemabox",
-  "name": "CinemaBox",
-  "version": "2.1.8",
-  "description": "Cinema Box direct movie and TV episode streams with Turbo Speed.",
+  "id": "cinemabox-beta",
+  "name": "CinemaBox Beta",
+  "version": "2.1.8-beta.1",
+  "description": "Experimental CinemaBox performance build for faster source discovery and stream startup testing.",
   "author": "Community",
   "logo": "https://cinema.albox.co/favicon.ico",
   "contentLanguage": [
@@ -11,10 +11,10 @@
   ],
   "scrapers": [
     {
-      "id": "cinemabox",
-      "name": "CinemaBox",
-      "description": "Cinema Box movie and series sources",
-      "version": "2.1.8",
+      "id": "cinemabox-beta",
+      "name": "CinemaBox Beta",
+      "description": "Experimental CinemaBox performance scraper for Nuvio",
+      "version": "2.1.8-beta.1",
       "filename": "index.js",
       "supportedTypes": [
         "movie",
