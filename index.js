@@ -681,21 +681,12 @@ function searchCinemaBox(title, type, year, deadline) {
       var requestKey = String(term) + '::' + pageNum;
       if (pageRequests.has(requestKey)) return pageRequests.get(requestKey);
       var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
-      function attempt(retry) {
-        return api('search?' + queryStr, deadline, 0).catch(function (error) {
-          var message = String(error && error.message || error);
-          var retryable = !/HTTP (?:400|401|403|404|405|410|422)\b/.test(message);
-          if (retry < 1 && retryable) {
-            console.log('[SEARCH PAGE RETRY]', 'term:', term, 'page:', pageNum);
-            return attempt(retry + 1);
-          }
-          failedPageCount++;
-          console.log('[SEARCH PAGE ERROR]', term, 'page', pageNum,
-            error && error.message ? redactSensitive(error.message) : redactSensitive(error));
-          return null;
-        });
-      }
-      var pending = attempt(0);
+      var pending = api('search?' + queryStr, deadline).catch(function (error) {
+        failedPageCount++;
+        console.log('[SEARCH PAGE ERROR]', term, 'page', pageNum,
+          error && error.message ? redactSensitive(error.message) : redactSensitive(error));
+        return null;
+      });
       pageRequests.set(requestKey, pending);
       return pending;
     }
