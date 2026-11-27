@@ -498,7 +498,7 @@ test('episode lookup fetches season details only when requested season differs',
   const seasonTwoEpisode = await api.findEpisode(showDetails, 'show-123', 2, 1);
   assert.equal(seasonTwoEpisode, 'episode-201');
   assert.equal(requests.length, 1, 'a different season should use the dedicated season-player endpoint');
-  assert.match(requests[0], /shows\\/seasons\\/player\\/season-2-id/);
+  assert.ok(requests[0].includes('/shows/seasons/player/season-2-id'));
 });
 
 
