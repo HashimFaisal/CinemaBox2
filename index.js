@@ -1985,6 +1985,9 @@ function getTmdbMetadata(tmdbId, mediaType, deadline) {
   var key = typeof TMDB_API_KEY !== 'undefined' ? TMDB_API_KEY : '';
   if (!key) return Promise.reject(new Error('TMDB API key is unavailable'));
 
+  // TMDB's title, original title and release date are enough for CinemaBox search.
+  // external_ids is requested in the same response, but IMDb is optional: never
+  // spend a second network round trip resolving it when the TMDB identity is valid.
   var url = 'https://api.themoviedb.org/3/' + kind + '/' +
     encodeURIComponent(String(tmdbId)) + '?api_key=' + encodeURIComponent(key) +
     '&append_to_response=external_ids';
@@ -1994,36 +1997,16 @@ function getTmdbMetadata(tmdbId, mediaType, deadline) {
       var name = data && (data.title || data.name);
       if (!name) throw new Error('TMDB metadata is incomplete for ' + tmdbId);
 
-      var imdbId = data.imdb_id || (data.external_ids && data.external_ids.imdb_id);
-      if (imdbId) {
-        return {
-          imdbId: imdbId,
-          meta: {
-            name: name,
-            original_name: data.original_title || data.original_name || name,
-            year: data.release_date || data.first_air_date || ''
-          }
-        };
-      }
-
-      // Some TMDB responses omit external_ids from append_to_response.
-      // Retry the dedicated endpoint before abandoning this title.
-      var externalUrl = 'https://api.themoviedb.org/3/' + kind + '/' +
-        encodeURIComponent(String(tmdbId)) + '/external_ids?api_key=' + encodeURIComponent(key);
-      return requestWithRetry(externalUrl, deadline, 1).then(function (external) {
-        var resolvedImdbId = external && external.imdb_id;
-        // IMDb IDs are optional: CinemaBox can be searched by TMDB titles.
-        return {
-          imdbId: resolvedImdbId || null,
-          meta: {
-            name: name,
-            original_name: data.original_title || data.original_name || name,
-            year: data.release_date || data.first_air_date || '',
-            tmdbId: String(tmdbId),
-            mediaType: kind
-          }
-        };
-      });
+      return {
+        imdbId: data.imdb_id || (data.external_ids && data.external_ids.imdb_id) || null,
+        meta: {
+          name: name,
+          original_name: data.original_title || data.original_name || name,
+          year: data.release_date || data.first_air_date || '',
+          tmdbId: String(tmdbId),
+          mediaType: kind
+        }
+      };
     });
   }, METADATA_CACHE_TTL_MS);
 }
