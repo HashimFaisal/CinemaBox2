@@ -16,6 +16,20 @@ function qualityRank(value) {
   return match ? Number(match[1]) : (QUALITY[String(value).toLowerCase()] || -1);
 }
 
+function isLikelyEmbedPage(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    const path = parsed.pathname.toLowerCase();
+    const knownEmbedHosts = [
+      'vidsrc.to', 'vidsrc.me', 'vidsrc.xyz', 'vidsrc.cc', 'vidsrc.net',
+      'vidlink.pro', 'autoembed.cc', '2embed.cc', 'smashystream.com', 'multiembed.mov'
+    ];
+    if (knownEmbedHosts.some(domain => host === domain || host.endsWith('.' + domain))) return true;
+    return /\/(?:embed|iframe)(?:\/|$)/.test(path);
+  } catch (_) { return false; }
+}
+
 function validHttpUrl(value) {
   if (typeof value !== 'string' || !value || value !== value.trim() || /\s|\\/.test(value)) return false;
   const protocolEnd = value.indexOf('://');
@@ -27,7 +41,8 @@ function validHttpUrl(value) {
   try {
     const parsed = new URL(value);
     return (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
-      Boolean(parsed.hostname) && !parsed.username && !parsed.password;
+      Boolean(parsed.hostname) && !parsed.username && !parsed.password &&
+      !isLikelyEmbedPage(value);
   } catch (_) { return false; }
 }
 

@@ -859,6 +859,8 @@ test('stream URL validation uses URL parsing and rejects credentials or invalid 
     'https://cdn.example:bad/video.mp4',
     'ftp://cdn.example/video.mp4',
     'https://cdn.example/video file.mp4',
+    'https://vidsrc.to/v2/embed/tt1234567',
+    'https://cdn.example/embed/episode/42',
     ' https://cdn.example/video.mp4',
     'https://cdn.example\\\\video.mp4'
   ];
@@ -1350,17 +1352,15 @@ test('bundled engine runs fallback providers only when primary results are empty
   assert.equal(result.streams[0].providerId, 'primary');
 });
 
-test('stable CinemaBox manifest and separate next-test manifest keep their identities', () => {
+test('official CinemaBox manifest is the single maintained add-on identity', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
-  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
-  const testManifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.next-test.json'), 'utf8'));
+  const manifestPath = path.join(__dirname, '..', 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const experimentalManifestPath = path.join(__dirname, '..', 'manifest.next-test.json');
   assert.equal(packageJson.version, manifest.version);
   assert.equal(manifest.id, 'cinemabox');
   assert.equal(manifest.name, 'CinemaBox');
   assert.equal(manifest.scrapers[0].id, 'cinemabox');
   assert.equal(manifest.scrapers[0].name, 'CinemaBox');
-  assert.equal(testManifest.id, 'cinemabox-next-test');
-  assert.equal(testManifest.name, 'CinemaBox Next (Test)');
-  assert.notEqual(testManifest.version, manifest.version);
-  assert.notDeepEqual(manifest, testManifest);
+  assert.equal(fs.existsSync(experimentalManifestPath), false);
 });

@@ -1,54 +1,38 @@
-# CinemaBox Next Engine — provider core
+# CinemaBox Engine
 
-The provider orchestration core is connected to the existing CinemaBox resolution path on this experimental branch.
+CinemaBox is a lightweight, standalone Nuvio stream scraper. The official plugin entry point is the root `index.js`; the manifest keeps one stable add-on identity: `cinemabox`.
 
-## Runtime integration
+## Runtime path
 
-- `cinemabox` is the first verified provider.
-- Existing metadata, title matching, season/episode resolution, details/player lookup, cache, and diagnostics remain in place.
-- The adapter receives the existing resolved IMDb ID, media type, metadata, and absolute deadline.
-- Results are normalized internally, then mapped back to the exact four-field Nuvio stream object: `name`, `title`, `url`, and `quality`.
-- The engine is bundled into `index.js` because the manifest loads a single entry file. Keep the standalone engine module and bundled implementation synchronized.
+`Nuvio → CinemaBox adapter → CinemaBox API → normalized direct stream candidates → Nuvio`
 
-## Phase 3 — Internet Archive adapter
+- Primary API: `https://cinema.albox.co/api/v4`
+- Transport fallback: `https://pucinema.albox.co/api/v4`
+- The fallback is used for retryable transport/server failures. A successful empty response is not automatically treated as an outage.
+- Internet Archive remains disabled by default and is not part of the active source path.
 
-- Added a separate `providers/internet-archive.js` adapter using the documented Archive.org Advanced Search and Item Metadata read APIs.
-- It only searches movies, requires exact normalized title and compatible year, and only emits direct media files when the item explicitly declares a Public Domain or CC0 rights marker.
-- It filters out non-video files, private files, unsafe filenames, and items without an explicit permitted rights marker.
-- It is registered in the provider engine but remains **disabled by default** via `ENABLE_INTERNET_ARCHIVE_PROVIDER = false`.
-- Its provider-specific timeout is 5 seconds, so enabling it cannot consume the full CinemaBox request budget.
-- It does not scrape third-party torrent sites or treat CinemaBox's multiple quality links as separate providers.
+## Professional engine capabilities
 
-## Provider engine capabilities
+1. **Speed:** bounded search work, first-page strong-match fast path, request de-duplication, in-flight promise sharing, and bounded LRU/TTL caches.
+2. **Stream quality:** strict HTTP(S) URL parsing, rejection of known embed-page URLs, exact URL de-duplication, and preservation of distinct signed URLs.
+3. **Reliability:** shared request deadlines, retryable HTTP/network handling, primary-to-fallback host recovery, per-provider timeouts, and a cooldown circuit breaker.
+4. **Result ranking:** quality first; then configured provider priority, productive extraction history, and observed response latency. These are extraction signals, not playback-success claims.
+5. **Nuvio compatibility:** one manifest entry point and the expected stream fields `name`, `title`, `url`, and `quality`; movie and selected TV episode resolution remain supported.
+6. **Validation:** unit and integration tests cover URL safety, de-duplication, search fast paths, fallback behavior, time budgets, cache behavior, season/episode matching, and the public Nuvio entry point.
 
-- bounded provider concurrency
-- per-provider deadlines
-- HTTP(S) URL validation
-- normalized stream shape
-- exact-URL deduplication while preserving distinct signed URLs
-- quality-first sorting and provider priority tie-break
-- per-provider failure counters and cooldown circuit breaker
+## Important limits
 
-## Validation and release boundary
+- CinemaBox does not claim to verify that a returned stream plays to completion. Playback feedback is not available through the scraper contract; device playback must be checked in Nuvio.
+- A valid HTTP(S) media candidate is not proof that the remote server will remain available.
+- Quality labels come from the upstream API and are not independently measured by CinemaBox.
+- Do not add providers or hosted services as part of routine optimization; keep the plugin independent and lightweight.
 
-Provider contract tests use mocked Archive.org responses and verify title/year matching, file filtering, and rights checks. They do not claim live availability or real-device playback.
+## Test
 
-This branch is experimental. The official `main` version 2.1.7, manifest, releases, and tags remain unchanged. Internet Archive stays opt-in until its result quality and playback are verified in Nuvio.
+Run the complete automated suite with:
 
-## Side-by-side Nuvio test install
+```sh
+npm test
+```
 
-A separate root-level `manifest.next-test.json` uses the unique add-on ID `cinemabox-next-test` and prerelease label `2.1.7-next.11`. It points to the branch's `index.js` and is intended for side-by-side validation without replacing the official CinemaBox add-on. This test manifest is not the official `manifest.json` and must not be published as a stable release.
-
-Test manifest URL:
-`https://raw.githubusercontent.com/HashimFaisal/CinemaBox2/fix/cinemabox-next11-reliability/manifest.next-test.json`
-
-
-## Provider health metrics (extraction, not playback)
-
-The runtime health snapshot distinguishes productive extraction from transport failures:
-- `productiveRate` is the share of provider attempts that returned at least one valid HTTP(S) stream URL. The legacy `successRate` field remains an alias for compatibility.
-- `emptyResponses` counts successful provider calls that yielded no valid streams.
-- `errorCount` and `timeoutCount` track failed calls; `rejectedStreams` counts invalid stream candidates.
-- `validStreams` counts accepted stream candidates and `latencyEwmaMs` measures provider response latency.
-
-These are **not playback-success metrics**. The Nuvio scraper contract supplies stream candidates but no callback when a user starts, buffers, or completes playback. Playback verification must therefore come from Nuvio player logs or an explicit future host feedback API. Ranking remains quality-first, then configured provider priority, productive extraction rate, and response latency; it must not claim that a source has been playback-verified.
+The GitHub Actions workflow runs the same command on pushes and pull requests.
