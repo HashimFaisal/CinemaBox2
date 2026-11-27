@@ -1164,6 +1164,14 @@ const VIDEO_PROBE_CACHE_TTL_MS = 300000;
 const VIDEO_PROBE_HEAD_BYTES = 512 * 1024;
 const VIDEO_PROBE_TAIL_BYTES = 2 * 1024 * 1024;
 
+function formatVideoDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '';
+  var total = Math.floor(seconds);
+  var hours = Math.floor(total / 3600);
+  var minutes = Math.floor((total % 3600) / 60);
+  return hours ? hours + 'h ' + minutes + 'm' : minutes + 'm';
+}
+
 function videoQualityFromDimensions(width, height) {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
   if (width >= 3800 || height >= 2100) return '2160p';
@@ -1293,13 +1301,19 @@ function probeVideoSource(url, deadline) {
         });
       }).then(function (metadata) {
         if (!metadata) return null;
-        return {
+        var info = {
           width: metadata.width,
           height: metadata.height,
           duration: metadata.duration,
           sizeBytes: sizeBytes,
           contentType: contentType
         };
+        console.log('[VIDEO SOURCE PROBE]', 'status: ok',
+          'resolution:', info.width + 'x' + info.height,
+          'sizeBytes:', info.sizeBytes || 'unknown',
+          'durationSeconds:', info.duration || 'unknown',
+          'contentType:', info.contentType || 'unknown');
+        return info;
       });
     });
   }, VIDEO_PROBE_CACHE_TTL_MS).catch(function (error) {
@@ -1316,7 +1330,8 @@ function buildStream(video, displayTitle, sourceInfo) {
   var streamLabel = 'CinemaBox (' + displayTitle + ') ' + quality;
   var sourceDetails = sourceInfo
     ? ' • ' + sourceInfo.width + 'x' + sourceInfo.height +
-      (sourceInfo.sizeBytes ? ' • ' + (sourceInfo.sizeBytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB' : '')
+      (sourceInfo.sizeBytes ? ' • ' + (sourceInfo.sizeBytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB' : '') +
+      (sourceInfo.duration ? ' • ' + formatVideoDuration(sourceInfo.duration) : '')
     : '';
   var output = {
     name: streamLabel,
