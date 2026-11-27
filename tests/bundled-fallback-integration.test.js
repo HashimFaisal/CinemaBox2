@@ -124,3 +124,94 @@ test('bundled Nuvio entrypoint uses supplied metadata when TMDB lookup is unavai
   assert.equal(result.calls.some(function (url) { return url.startsWith('https://api.themoviedb.org/'); }), false);
   assert.ok(result.calls.some(function (url) { return url.startsWith('https://cinema.albox.co/api/v4/search?'); }));
 });
+
+
+test('bundled entrypoint uses the dedicated season-player API and forwards supplied app headers', async function () {
+  const receivedHeaders = [];
+  const result = await runPlugin(function (url, options) {
+    receivedHeaders.push(options && options.headers || {});
+    if (url.startsWith('https://cinema.albox.co/api/v4/search?')) {
+      return response({ results: [{ id: 765, type: 'TV', title: TITLE, year: '2020' }] });
+    }
+    if (url === 'https://cinema.albox.co/api/v4/shows/shows/dynamic/765') {
+      return response({
+        post_info: { id: 765, title: TITLE, season_number: 1, current_season_id: 'season-1' },
+        sections: []
+      });
+    }
+    if (url === 'https://cinema.albox.co/api/v4/shows/seasons/player/season-1') {
+      return response({
+        episodes: [{
+          id: 'episode-101',
+          episode_number: 1,
+          seasonNumber: 1,
+          title: 'Episode 1',
+          image: 'https://img.example.test/episode.jpg',
+          length: 1800
+        }]
+      });
+    }
+    if (url === 'https://cinema.albox.co/api/v4/shows/episodes/player/episode-101') {
+      return response({
+        file: 'https://cdn.example.test/episode-101.mp4',
+        quality: '1080p',
+        videos: [],
+        subtitles: [{ url: 'https://cdn.example.test/episode-101.en.vtt', language: 'en' }],
+        parental_access: true
+      });
+    }
+    throw new Error('Unexpected URL in season-player integration test: ' + url);
+  }, {
+    tmdbId: '765',
+    mediaType: 'tv',
+    season: 1,
+    episode: 1,
+    meta: { name: TITLE, original_name: TITLE, year: '2020' },
+    headers: {
+      'Device-Id': 'device-test',
+      'Device-Model': 'Nuvio Test Device',
+      'Device-OS-Version': 'Android Test',
+      'App-Version': '9.9.9',
+      JWT: 'jwt-test-value',
+      Authorization: 'Bearer authorization-test-value'
+    }
+  });
+
+  assert.equal(result.streams.length, 1);
+  assert.equal(result.streams[0].url, 'https://cdn.example.test/episode-101.mp4');
+  assert.equal(result.streams[0].quality, '1080p');
+  assert.equal(result.streams[0].subtitles[0].language, 'en');
+  assert.ok(result.calls.some(url => url.endsWith('/shows/seasons/player/season-1')));
+  assert.ok(result.calls.some(url => url.endsWith('/shows/episodes/player/episode-101')));
+  for (const [key, value] of Object.entries({
+    'Device-Id': 'device-test',
+    'Device-Model': 'Nuvio Test Device',
+    'Device-OS-Version': 'Android Test',
+    'App-Version': '9.9.9',
+    JWT: 'jwt-test-value',
+    Authorization: 'Bearer authorization-test-value'
+  })) {
+    assert.ok(receivedHeaders.some(headers => headers[key] === value), 'missing forwarded header ' + key);
+  }
+});
+
+test('bundled entrypoint retries the secondary API host after primary host transport failure', async function () {
+  const result = await runPlugin(function (url) {
+    if (url.startsWith('https://cinema.albox.co/api/v4/search?')) {
+      return response({ error: 'primary host unavailable' }).then ? Promise.resolve({
+        ok: false, status: 503, text: async function () { return 'upstream unavailable'; }
+      }) : response({ results: [] });
+    }
+    if (url.startsWith('https://pucinema.albox.co/api/v4/search?')) {
+      return response({ results: [] });
+    }
+    throw new Error('Unexpected URL in secondary-host integration test: ' + url);
+  }, {
+    tmdbId: '765',
+    mediaType: 'movie',
+    meta: { name: 'Secondary Host Test Film', original_name: 'Secondary Host Test Film' }
+  });
+
+  assert.deepEqual(result.streams, []);
+  assert.ok(result.calls.some(url => url.startsWith('https://pucinema.albox.co/api/v4/search?')));
+});
