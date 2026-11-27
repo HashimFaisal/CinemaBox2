@@ -503,9 +503,10 @@ function requestWithRetry(url, deadline, maxRetries) {
   return attempt(0);
 }
 
-function api(path, deadline) {
+function api(path, deadline, maxRetries) {
   var primaryUrl = BASE + '/' + path;
-  return requestWithRetry(primaryUrl, deadline, 1).catch(function (primaryError) {
+  var retries = Number.isInteger(maxRetries) && maxRetries >= 0 ? maxRetries : 1;
+  return requestWithRetry(primaryUrl, deadline, retries).catch(function (primaryError) {
     if (!shouldTryFallbackHost(primaryError)) throw primaryError;
     var fallbackIndex = 0;
     function tryNext() {
@@ -681,7 +682,7 @@ function searchCinemaBox(title, type, year, deadline) {
       if (pageRequests.has(requestKey)) return pageRequests.get(requestKey);
       var queryStr = 'page_size=25&page_number=' + pageNum + '&term=' + encodeURIComponent(term);
       function attempt(retry) {
-        return api('search?' + queryStr, deadline).catch(function (error) {
+        return api('search?' + queryStr, deadline, 0).catch(function (error) {
           var message = String(error && error.message || error);
           var retryable = !/HTTP (?:400|401|403|404|405|410|422)\b/.test(message);
           if (retry < 1 && retryable) {
