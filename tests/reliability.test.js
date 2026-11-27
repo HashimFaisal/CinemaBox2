@@ -12,7 +12,7 @@ function loadInternals(fetchImpl, logger, timers) {
   const sandbox = {
     URL,
     AbortController,
-    AbortSignal,
+    AbortSignal: timers && Object.prototype.hasOwnProperty.call(timers, 'AbortSignal') ? timers.AbortSignal : AbortSignal,
     setTimeout: timers && typeof timers.setTimeout === 'function' ? timers.setTimeout : setTimeout,
     clearTimeout: timers && typeof timers.clearTimeout === 'function' ? timers.clearTimeout : clearTimeout,
     module: { exports: {} },
@@ -1381,4 +1381,35 @@ test('HTTP requests use the native AbortSignal deadline when the runtime support
   const payload = await api.request('https://cinema.albox.co/api/v4/search', deadline);
   assert.deepEqual(payload, { ok: true });
   assert.ok(receivedSignal instanceof AbortSignal);
+});
+
+
+test('HTTP requests remain compatible when native timeout signals are unavailable', async () => {
+  let receivedOptions;
+  const api = loadInternals(async function (url, options) {
+    receivedOptions = options;
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ ok: true })
+    };
+  }, null, { AbortSignal: {} });
+  const payload = await api.request('https://cinema.albox.co/api/v4/search', Date.now() + 5000);
+  assert.deepEqual(payload, { ok: true });
+  assert.ok(receivedOptions);
+  assert.equal(Object.prototype.hasOwnProperty.call(receivedOptions, 'signal'), false);
+});
+
+test('HTTP requests abort when the native deadline expires', async () => {
+  const api = loadInternals(function (url, options) {
+    return new Promise(function (_, reject) {
+      options.signal.addEventListener('abort', function () {
+        reject(options.signal.reason || new Error('request aborted'));
+      }, { once: true });
+    });
+  });
+  await assert.rejects(
+    api.request('https://cinema.albox.co/api/v4/search', Date.now() + 15),
+    /timeout|abort/i
+  );
 });
