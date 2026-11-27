@@ -1335,3 +1335,12 @@ test('CinemaBox HTTP requests abort when the shared deadline expires', async () 
   );
   assert.equal(signalAborted, true, 'deadline must abort the underlying fetch');
 });
+
+test('next-test manifests and package version stay aligned', () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
+  const testManifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.next-test.json'), 'utf8'));
+  assert.equal(packageJson.version, manifest.version);
+  assert.equal(manifest.version, testManifest.version);
+  assert.deepEqual(manifest, testManifest);
+});
