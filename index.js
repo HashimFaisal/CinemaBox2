@@ -405,7 +405,7 @@ function request(url, deadline) {
     var parsedUrl = new URL(url);
     requestLabel = parsedUrl.hostname + parsedUrl.pathname;
   } catch (error) { requestLabel = 'invalid-url'; }
-  if (Number.isFinite(deadline)) {
+  if (Number.isFinite(deadline) && typeof setTimeout === 'function') {
     var remainingMs = Math.max(0, deadline - Date.now());
     if (remainingMs <= 0) throw new Error('CinemaBox request timeout before fetch');
     timeoutPromise = new Promise(function (_, reject) {
@@ -1233,7 +1233,7 @@ function createInternetArchiveProvider(options) {
     if (remainingMs <= 0) throw new Error('Internet Archive request timeout');
     let timer = null;
     let timeoutPromise = null;
-    if (Number.isFinite(remainingMs)) {
+    if (Number.isFinite(remainingMs) && typeof setTimeout === 'function') {
       timeoutPromise = new Promise(function (_, reject) {
         timer = setTimeout(function () {
           if (controller) controller.abort();
