@@ -354,9 +354,25 @@ function cached(key, loader, ttl) {
   return value;
 }
 
+function isLikelyEmbedPage(value) {
+  try {
+    var parsed = new URL(value);
+    var host = parsed.hostname.toLowerCase().replace(/^www\\./, '');
+    var path = parsed.pathname.toLowerCase();
+    var knownEmbedHosts = [
+      'vidsrc.to', 'vidsrc.me', 'vidsrc.xyz', 'vidsrc.cc', 'vidsrc.net',
+      'vidlink.pro', 'autoembed.cc', '2embed.cc', 'smashystream.com', 'multiembed.mov'
+    ];
+    if (knownEmbedHosts.some(function (domain) { return host === domain || host.endsWith('.' + domain); })) return true;
+    return /\\/(?:embed|iframe)(?:\\/|$)/.test(path);
+  } catch (error) {
+    return false;
+  }
+}
+
 function validateStreamUrl(value) {
   if (typeof value !== 'string' || !value || value !== value.trim() ||
-      value.indexOf('\\') !== -1 || /\s/.test(value)) return false;
+      value.indexOf('\\\\') !== -1 || /\\s/.test(value)) return false;
   // Reject empty authorities before WHATWG URL parsing normalizes malformed slashes.
   var protocolEnd = value.indexOf('://');
   if (protocolEnd < 0) return false;
@@ -368,7 +384,7 @@ function validateStreamUrl(value) {
     var parsed = new URL(value);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
     if (!parsed.hostname || parsed.username || parsed.password) return false;
-    return true;
+    return !isLikelyEmbedPage(value);
   } catch (error) {
     return false;
   }
