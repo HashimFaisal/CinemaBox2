@@ -54,6 +54,7 @@ var createProviderEngine = (function () {
       providerId: provider.id
     };
     if (stream.language) output.language = String(stream.language);
+    if (Array.isArray(stream.subtitles) && stream.subtitles.length) output.subtitles = stream.subtitles.slice();
     if (Number.isFinite(Number(stream.sizeBytes)) && Number(stream.sizeBytes) > 0) output.sizeBytes = Number(stream.sizeBytes);
     if (Number.isFinite(Number(stream.seeders)) && Number(stream.seeders) >= 0) output.seeders = Number(stream.seeders);
     return output;
@@ -1856,13 +1857,16 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
         console.log('[ENGINE TRACE] entry-engine-result', 'elapsedMs:', Date.now() - requestStart, 'at:', Date.now());
         var streams = result.streams.map(function (stream) {
           // Preserve the exact public stream shape expected by Nuvio.
-          return {
+          var mappedStream = {
             name: stream.name,
             title: stream.title,
             url: stream.url,
-            quality: stream.quality,
-            subtitles: stream.subtitles
+            quality: stream.quality
           };
+          if (Array.isArray(stream.subtitles) && stream.subtitles.length) {
+            mappedStream.subtitles = stream.subtitles.slice();
+          }
+          return mappedStream;
         });
         var providerHealth = cinemaBoxProviderEngine.getHealth();
         console.log('[PROVIDER ENGINE]', JSON.stringify({
