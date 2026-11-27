@@ -1427,7 +1427,7 @@ function createInternetArchiveProvider(options) {
           rejected.invalidFileName += 1;
           return;
         }
-        if (!/\\.(?:mp4|m4v|webm|ogv)$/i.test(file.name)) {
+        if (!/\.(?:mp4|m4v|webm|ogv)$/i.test(file.name)) {
           rejected.unsupportedMedia += 1;
           return;
         }
