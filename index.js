@@ -815,10 +815,21 @@ function searchCinemaBoxTitles(primaryTitle, alternateTitle, type, year, deadlin
 }
 
 function parseExternalId(id) {
-  var match = String(id).match(/^(tt\d+)(?::(\d+):(\d+))?$/);
+  var value = String(id || '');
+  var match = value.match(/^(tt\d+)(?::(\d+):(\d+))?$/i);
+  if (match) {
+    return {
+      imdbId: match[1],
+      tmdbId: null,
+      season: match[2] ? Number(match[2]) : null,
+      episode: match[3] ? Number(match[3]) : null
+    };
+  }
+  match = value.match(/^tmdb:(\d+)(?::(\d+):(\d+))?$/i);
   if (!match) return null;
   return {
-    imdbId: match[1],
+    imdbId: null,
+    tmdbId: match[1],
     season: match[2] ? Number(match[2]) : null,
     episode: match[3] ? Number(match[3]) : null
   };
@@ -1568,15 +1579,15 @@ function getTmdbMetadata(tmdbId, mediaType, deadline) {
         encodeURIComponent(String(tmdbId)) + '/external_ids?api_key=' + encodeURIComponent(key);
       return requestWithRetry(externalUrl, deadline, 1).then(function (external) {
         var resolvedImdbId = external && external.imdb_id;
-        if (!resolvedImdbId) {
-          throw new Error('TMDB IMDb ID is missing for ' + kind + '/' + tmdbId);
-        }
+        // IMDb IDs are optional: CinemaBox can be searched by TMDB titles.
         return {
-          imdbId: resolvedImdbId,
+          imdbId: resolvedImdbId || null,
           meta: {
             name: name,
             original_name: data.original_title || data.original_name || name,
-            year: data.release_date || data.first_air_date || ''
+            year: data.release_date || data.first_air_date || '',
+            tmdbId: String(tmdbId),
+            mediaType: kind
           }
         };
       });
@@ -1617,8 +1628,9 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
     }
 
     function run(imdbId, meta) {
-      if (!imdbId) return [];
-      var id = imdbId;
+      // Prefer IMDb when available; otherwise preserve the TMDB identity so
+      // fetchStreams can search by the title metadata without Cinemeta.
+      var id = imdbId || ('tmdb:' + rawId);
       if (oldType === 'series') {
         if (args.season == null || args.episode == null) return [];
         id += ':' + Number(args.season) + ':' + Number(args.episode);
