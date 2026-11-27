@@ -30,11 +30,31 @@ function createInternetArchiveProvider(options) {
   const fetchImpl = config.fetch || (typeof fetch === 'function' ? fetch : null);
   const maxResults = Math.max(1, Math.min(5, Number(config.maxResults) || 3));
 
-  async function getJson(url) {
+  async function getJson(url, deadline) {
     if (!fetchImpl) throw new Error('Internet Archive fetch is unavailable');
-    const response = await fetchImpl(url, { headers: { Accept: 'application/json' } });
-    if (!response || !response.ok) throw new Error('Internet Archive HTTP ' + (response && response.status || 'error'));
-    return response.json ? response.json() : JSON.parse(await response.text());
+    const remainingMs = Number.isFinite(deadline) ? deadline - Date.now() : Infinity;
+    if (remainingMs <= 0) throw new Error('Internet Archive request timeout');
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    let timer = null;
+    let timeoutPromise = null;
+    if (Number.isFinite(remainingMs) && typeof setTimeout === 'function') {
+      timeoutPromise = new Promise(function (_, reject) {
+        timer = setTimeout(function () {
+          if (controller) controller.abort();
+          reject(new Error('Internet Archive request timeout'));
+        }, Math.max(1, remainingMs));
+      });
+    }
+    const options = { headers: { Accept: 'application/json' } };
+    if (controller) options.signal = controller.signal;
+    try {
+      const work = Promise.resolve().then(function () { return fetchImpl(url, options); });
+      const response = timeoutPromise ? await Promise.race([work, timeoutPromise]) : await work;
+      if (!response || !response.ok) throw new Error('Internet Archive HTTP ' + (response && response.status || 'error'));
+      return response.json ? response.json() : JSON.parse(await response.text());
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
   }
 
   async function getStreams(context) {
@@ -42,6 +62,7 @@ function createInternetArchiveProvider(options) {
     if (String(input.type || '').toLowerCase() !== 'movie') return [];
     const meta = input.meta || {};
     const title = String(meta.name || meta.title || meta.original_name || '').trim();
+    const deadline = Number.isFinite(input.deadline) ? input.deadline : Infinity;
     if (!title) return [];
 
     const year = yearOf(meta.year || meta.release_date);
@@ -49,7 +70,7 @@ function createInternetArchiveProvider(options) {
     const query = 'mediatype:movies AND title:"' + escapedTitle + '"';
     const searchUrl = 'https://archive.org/advancedsearch.php?q=' + encodeURIComponent(query) +
       '&fl[]=identifier&fl[]=title&fl[]=year&fl[]=licenseurl&rows=' + maxResults + '&page=1&output=json';
-    const search = await getJson(searchUrl);
+    const search = await getJson(searchUrl, deadline);
     const docs = search && search.response && Array.isArray(search.response.docs)
       ? search.response.docs : [];
 
@@ -62,7 +83,7 @@ function createInternetArchiveProvider(options) {
     const streams = [];
     for (const doc of candidates) {
       const metadataUrl = 'https://archive.org/metadata/' + encodeURIComponent(doc.identifier);
-      const record = await getJson(metadataUrl);
+      const record = await getJson(metadataUrl, deadline);
       const metadata = record && record.metadata || {};
       if (!isPermittedLicense(metadata)) continue;
       if (normalize(metadata.title || doc.title) !== normalize(title)) continue;
