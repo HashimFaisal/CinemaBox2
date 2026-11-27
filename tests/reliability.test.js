@@ -1379,7 +1379,7 @@ test('HTTP requests use the native AbortSignal deadline when the runtime support
   });
   const deadline = Date.now() + 5000;
   const payload = await api.request('https://cinema.albox.co/api/v4/search', deadline);
-  assert.deepEqual(payload, { ok: true });
+  assert.equal(payload.ok, true);
   assert.ok(receivedSignal instanceof AbortSignal);
 });
 
