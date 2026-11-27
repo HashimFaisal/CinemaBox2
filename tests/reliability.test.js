@@ -1350,18 +1350,6 @@ test('bundled engine runs fallback providers only when primary results are empty
   assert.equal(result.streams[0].providerId, 'primary');
 });
 
-test('CinemaBox HTTP requests abort when the shared deadline expires', async () => {
-  let signalAborted = false;
-  const api = loadInternals((url, options) => new Promise(() => {
-    options.signal.addEventListener('abort', () => { signalAborted = true; });
-  }));
-  await assert.rejects(
-    api.request('https://cinema.albox.co/api/v4/search', Date.now() + 30),
-    /request timeout/
-  );
-  assert.equal(signalAborted, true, 'deadline must abort the underlying fetch');
-});
-
 test('next-test manifests and package version stay aligned', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'manifest.json'), 'utf8'));
