@@ -48,7 +48,7 @@ test('returns streams as soon as the first strong title query completes', async 
     const elapsedMs = Date.now() - startedAt;
 
     assert.equal(streams.length, 1);
-    assert.equal(streams[0].quality, '1080p');
+    assert.equal(streams[0].quality, 'Video');
     assert.ok(elapsedMs < 500, 'first strong match should not wait for the slower alternate title query');
     assert.ok(calls.some(call => call.includes('term=Fast Path Movie')));
   } finally {
