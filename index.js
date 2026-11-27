@@ -99,16 +99,23 @@ var createProviderEngine = (function () {
         let timer;
       let timedOut = false;
       try {
-        const work = Promise.resolve().then(() => provider.getStreams(Object.assign({}, context, {
-          providerId: provider.id, deadline: deadline
-        })));
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      const providerContext = Object.assign({}, context, {
+        providerId: provider.id, deadline: deadline,
+        signal: controller ? controller.signal : undefined
+      });
+      const work = Promise.resolve().then(() => provider.getStreams(providerContext));
         // Embedded runtimes may retain completed timeout handles after clearTimeout.
         let result;
         if (provider.skipTimeoutTimer === true) {
           result = await work;
         } else {
           const timeout = new Promise((_, reject) => {
-            timer = schedule(() => { timedOut = true; reject(new Error('PROVIDER_TIMEOUT')); }, Math.max(1, deadline - now()));
+            timer = schedule(() => {
+            timedOut = true;
+            if (controller) controller.abort();
+            reject(new Error('PROVIDER_TIMEOUT'));
+          }, Math.max(1, deadline - now()));
           });
           result = await Promise.race([work, timeout]);
           cancel(timer);
@@ -391,44 +398,47 @@ function request(url, deadline) {
   var requestStart = Date.now();
   var timingLogged = false;
   var requestLabel = 'unknown';
+  var controller = typeof AbortController === 'function' ? new AbortController() : null;
+  var timer = null;
+  var timeoutPromise = null;
   try {
     var parsedUrl = new URL(url);
     requestLabel = parsedUrl.hostname + parsedUrl.pathname;
-  } catch (error) {
-    requestLabel = 'invalid-url';
+  } catch (error) { requestLabel = 'invalid-url'; }
+  if (Number.isFinite(deadline)) {
+    var remainingMs = Math.max(0, deadline - Date.now());
+    if (remainingMs <= 0) throw new Error('CinemaBox request timeout before fetch');
+    timeoutPromise = new Promise(function (_, reject) {
+      timer = setTimeout(function () {
+        if (controller) controller.abort();
+        reject(new Error('CinemaBox request timeout'));
+      }, remainingMs);
+    });
   }
-
-  return fetch(url, {
-    headers: {
-      Accept: 'application/json',
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36',
-      'Referer': 'https://cinema.albox.co/',
-      'Origin': 'https://cinema.albox.co',
-      'Accept-Language': 'en-US,en;q=0.9'
-    }
-  })
-  .then(function (response) {
+  var options = { headers: {
+    Accept: 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36',
+    'Referer': 'https://cinema.albox.co/',
+    'Origin': 'https://cinema.albox.co',
+    'Accept-Language': 'en-US,en;q=0.9'
+  }};
+  if (controller) options.signal = controller.signal;
+  var work = Promise.resolve().then(function () { return fetch(url, options); }).then(function (response) {
     return response.text().then(function (body) {
       timingLogged = true;
       console.log('[HTTP TIMING]', requestLabel, 'status:', response.status,
         'ms:', Date.now() - requestStart, 'bytes:', body.length);
-      if (!response.ok) {
-        throw new Error('HTTP ' + response.status + ': ' + redactSensitive(url) + ' | BODY: ' + redactSensitive(body.slice(0, 700)));
-      }
-      try {
-        return JSON.parse(body);
-      } catch (e) {
-        throw new Error('Invalid JSON from ' + redactSensitive(url) + ': ' + redactSensitive(body.slice(0, 300)));
-      }
+      if (!response.ok) throw new Error('HTTP ' + response.status + ': ' + redactSensitive(url) + ' | BODY: ' + redactSensitive(body.slice(0, 700)));
+      try { return JSON.parse(body); }
+      catch (e) { throw new Error('Invalid JSON from ' + redactSensitive(url) + ': ' + redactSensitive(body.slice(0, 300))); }
     });
-  })
-  .catch(function (error) {
-    if (!timingLogged) {
-      console.log('[HTTP TIMING]', requestLabel, 'status: failed',
-        'ms:', Date.now() - requestStart);
-    }
-    throw error;
   });
+  var pending = timeoutPromise ? Promise.race([work, timeoutPromise]) : work;
+  return pending.catch(function (error) {
+    if (controller && controller.signal && controller.signal.aborted) throw new Error('CinemaBox request timeout');
+    if (!timingLogged) console.log('[HTTP TIMING]', requestLabel, 'status: failed', 'ms:', Date.now() - requestStart);
+    throw error;
+  }).finally(function () { if (timer !== null) clearTimeout(timer); });
 }
 
 function requestWithRetry(url, deadline, maxRetries) {
@@ -1218,7 +1228,26 @@ function createInternetArchiveProvider(options) {
   async function getJson(url, deadline) {
     ensureBudget(deadline, 'Internet Archive request');
     if (!fetchImpl) throw new Error('Internet Archive fetch is unavailable');
-    const response = await fetchImpl(url, { headers: { Accept: 'application/json' } });
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const remainingMs = Number.isFinite(deadline) ? deadline - Date.now() : Infinity;
+    if (remainingMs <= 0) throw new Error('Internet Archive request timeout');
+    let timer = null;
+    let timeoutPromise = null;
+    if (Number.isFinite(remainingMs)) {
+      timeoutPromise = new Promise(function (_, reject) {
+        timer = setTimeout(function () {
+          if (controller) controller.abort();
+          reject(new Error('Internet Archive request timeout'));
+        }, Math.max(1, remainingMs));
+      });
+    }
+    const options = { headers: { Accept: 'application/json' } };
+    if (controller) options.signal = controller.signal;
+    let response;
+    try {
+      const work = Promise.resolve().then(function () { return fetchImpl(url, options); });
+      response = timeoutPromise ? await Promise.race([work, timeoutPromise]) : await work;
+    } finally { if (timer !== null) clearTimeout(timer); }
     if (!response || !response.ok) throw new Error('Internet Archive HTTP ' + (response && response.status || 'error'));
     const data = response.json ? await response.json() : JSON.parse(await response.text());
     ensureBudget(deadline, 'Internet Archive response processing');
@@ -1515,7 +1544,7 @@ function createInternetArchiveProvider(options) {
   };
 }
 
-var ENABLE_INTERNET_ARCHIVE_PROVIDER = true;
+var ENABLE_INTERNET_ARCHIVE_PROVIDER = false;
 
 var cinemaBoxProviderEngine = createProviderEngine({
   providers: [{
@@ -1683,12 +1712,16 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
       });
     }
 
+    var suppliedMeta = args.meta && typeof args.meta === 'object' &&
+      (args.meta.name || args.meta.title || args.meta.original_name) ? args.meta : null;
     if (/^tt\d+$/i.test(rawId)) {
+      if (suppliedMeta) return run(rawId, suppliedMeta);
       return getExternalMeta(oldType, rawId, deadline).then(function (meta) {
         return run(rawId, meta);
       });
     }
-
+    // Use metadata already supplied by Nuvio when TMDB authentication is unavailable.
+    if (suppliedMeta) return run(null, suppliedMeta);
     var tmdbStart = Date.now();
     ensureBudget(deadline, 'TMDB metadata');
     return getTmdbMetadata(rawId, rawType, deadline).then(function (resolved) {
