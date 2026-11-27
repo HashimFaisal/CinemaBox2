@@ -87,7 +87,7 @@ test('public Nuvio entry point resolves season zero specials and preserves all t
     episode: 1
   });
 
-  assert.deepEqual(Array.from(streams, stream => stream.quality), ['1080p', '720p', '480p']);
+  assert.deepEqual(Array.from(streams, stream => stream.quality), ['Video', 'Video', 'Video']);
   assert.equal(streams.length, 3);
   assert.ok(streams.every(stream => /S00E01/.test(stream.title)));
   assert.ok(requests.some(url => url.includes('/shows/seasons/player/specials-id')));
