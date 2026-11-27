@@ -464,7 +464,17 @@ function request(url, deadline) {
   // and keep a completed scraper invocation alive until the 45s deadline.
   // Enforce the shared budget at request/stage boundaries without scheduling
   // a per-request timer; this mirrors the timer-free embedded provider engine.
-  return fetch(url, { headers: headers }).then(function (response) {
+  // Cancel stalled network I/O at the shared deadline without leaving a
+  // JavaScript timer alive in embedded runtimes.
+  var requestOptions = { headers: headers };
+  var remainingMs = Number.isFinite(deadline) ? deadline - Date.now() : Infinity;
+  if (remainingMs <= 0) ensureBudget(deadline, 'HTTP request');
+  if (Number.isFinite(remainingMs) && typeof AbortSignal !== 'undefined' &&
+      typeof AbortSignal.timeout === 'function') {
+    requestOptions.signal = AbortSignal.timeout(Math.max(1, Math.floor(remainingMs)));
+  }
+
+  return fetch(url, requestOptions).then(function (response) {
     return response.text().then(function (body) {
       ensureBudget(deadline, 'HTTP response body');
       timingLogged = true;
