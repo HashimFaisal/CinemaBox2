@@ -318,8 +318,8 @@ test('HTTP requests avoid embedded deadline timers while retaining deadline guar
   assert.equal(result.ok, true);
   assert.equal(scheduledTimers, 0, 'embedded HTTP requests must not schedule retained timeout handles');
 
-  await assert.rejects(
-    api.request('https://api.example.test/expired', Date.now() - 1),
+  assert.throws(
+    () => api.request('https://api.example.test/expired', Date.now() - 1),
     /time budget exceeded/
   );
   assert.equal(fetchCalls, 1, 'expired request budgets must be rejected before fetch');
