@@ -996,8 +996,8 @@ function findEpisodeFromSeasonDetails(sd, seasonNumber, episodeNumber) {
     var number = Number(rawNumber);
     if (!Number.isSafeInteger(number) || number < 1) {
       var description = String(item.description == null ? '' : item.description).trim();
-      var labelled = description.match(/\\b(?:episode|ep|e|special)\\s*0*(\\d+)\\b/i) ||
-        description.match(/\\bs\\s*0*\\d+\\s*e\\s*0*(\\d+)\\b/i);
+      var labelled = description.match(/\b(?:episode|ep|e|special)\s*0*(\d+)\b/i) ||
+        description.match(/\bs\s*0*\d+\s*e\s*0*(\d+)\b/i);
       number = labelled ? Number(labelled[1]) : NaN;
     }
     var itemSeason = item.seasonNumber != null ? Number(item.seasonNumber) :
@@ -1006,7 +1006,6 @@ function findEpisodeFromSeasonDetails(sd, seasonNumber, episodeNumber) {
   }
   return null;
 }
-
 function findEpisodeFromLegacyDetails(details, showId, seasonNumber, episodeNumber, deadline) {
   var seasonDetails = details;
   var rawCurrentSeason = details.post_info && details.post_info.season_number;
