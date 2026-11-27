@@ -56,7 +56,7 @@ test('TMDB series without IMDb ID still reaches CinemaBox title search', async (
 
   assert.deepEqual(Array.from(streams), []);
   assert.ok(calls.includes('api.themoviedb.org/3/tv/134362'));
-  assert.ok(calls.includes('api.themoviedb.org/3/tv/134362/external_ids'));
+  assert.ok(!calls.includes('api.themoviedb.org/3/tv/134362/external_ids'));
   assert.ok(
     calls.includes('cinema.albox.co/api/v4/search'),
     'missing IMDb ID must not stop the plugin before CinemaBox title search'
