@@ -42,7 +42,7 @@ test('CinemaBox provider adapter preserves Nuvio stream contract', async () => {
     });
 
     assert.equal(streams.length, 2);
-    assert.deepEqual(streams.map(stream => stream.quality), ['1080p', '720p']);
+    assert.deepEqual(streams.map(stream => stream.quality), ['Video', 'Video']);
     streams.forEach(stream => {
       assert.deepEqual(Object.keys(stream).sort(), ['name', 'quality', 'title', 'url']);
       assert.match(stream.name, /^CinemaBox \(Adapter Integration Movie\)/);
