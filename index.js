@@ -793,46 +793,41 @@ function searchCinemaBox(title, type, year, deadline) {
       });
     }
 
-    return fetchFirstPage(title).then(function (firstPage) {
+    var fallbackTerm = year ? title + ' ' + year : null;
+    // Start the year-qualified first page alongside the plain-title request.
+    // This removes a full network round trip when the primary result is weak,
+    // while still ranking both result sets before choosing a match.
+    var firstPageWork = fetchFirstPage(title);
+    var fallbackPageWork = fallbackTerm
+      ? fetchFirstPage(fallbackTerm)
+      : Promise.resolve({ count: 0, best: null });
+
+    return Promise.all([firstPageWork, fallbackPageWork]).then(function (pages) {
+      var firstPage = pages[0];
+      var fallbackPage = pages[1];
       var firstCount = firstPage.count;
       var firstBest = firstPage.best;
+      var fallbackCount = fallbackPage.count;
       var best = rankItems(Array.from(foundItems.values()));
+
       if (best && best.titleScore >= 0.75 && best.score >= 0.75) {
-        console.log('[SEARCH STOP]', 'reason: first-page-strong-match', 'title:', best.item.title,
+        console.log('[SEARCH STOP]', 'reason: parallel-first-pages-strong-match',
+          'title:', best.item.title,
           'titleScore:', best.titleScore.toFixed(2), 'score:', best.score.toFixed(2));
         return;
       }
 
-      console.log('[SEARCH FALLBACK]', 'reason:', best ? 'best-score-below-0.95' : 'no-results',
-        'query:', title, 'year:', year || 'none',
+      console.log('[SEARCH PAGINATION]', 'reason: no-strong-match-after-parallel-first-pages',
         'best:', best ? best.item.title : 'none',
         'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
         'score:', best ? best.score.toFixed(2) : 'n/a');
-      var fallbackTerm = year ? title + ' ' + year : null;
-      var fallbackSearch = fallbackTerm ? fetchFirstPage(fallbackTerm) : Promise.resolve({ count: 0, best: null });
-
-      return fallbackSearch.then(function (fallbackPage) {
-        var fallbackCount = fallbackPage.count;
-        best = rankItems(Array.from(foundItems.values()));
-        if (best && best.titleScore >= 0.75 && best.score >= 0.75) {
-          console.log('[SEARCH STOP]', 'reason: fallback-strong-match', 'title:', best.item.title,
-            'titleScore:', best.titleScore.toFixed(2), 'score:', best.score.toFixed(2));
-          return;
-        }
-
-        console.log('[SEARCH PAGINATION]', 'reason: no-strong-match-after-first-pages',
-          'best:', best ? best.item.title : 'none',
-          'titleScore:', best ? best.titleScore.toFixed(2) : 'n/a',
-          'score:', best ? best.score.toFixed(2) : 'n/a');
-        // Paginate only the first-page query that produced the better candidate.
-        // This avoids expanding both the plain-title and year-fallback searches.
-        var useFallback = fallbackTerm && fallbackCount >= 25 && fallbackPage.best &&
-          (!firstBest || fallbackPage.best.score > firstBest.score);
-        var paginationTerm = useFallback ? fallbackTerm : title;
-        var paginationCount = useFallback ? fallbackCount : firstCount;
-        if (paginationCount >= 25) return fetchMorePages(paginationTerm, 2);
-        return Promise.resolve();
-      });
+      // Paginate only the query whose first page produced the stronger candidate.
+      var useFallback = fallbackTerm && fallbackCount >= 25 && fallbackPage.best &&
+        (!firstBest || fallbackPage.best.score > firstBest.score);
+      var paginationTerm = useFallback ? fallbackTerm : title;
+      var paginationCount = useFallback ? fallbackCount : firstCount;
+      if (paginationCount >= 25) return fetchMorePages(paginationTerm, 2);
+      return Promise.resolve();
     }).then(function () {
       var best = rankItems(Array.from(foundItems.values()));
       if (best && best.titleScore >= 0.75 && best.score >= 0.75) {
