@@ -50,6 +50,7 @@ function normalizeStream(stream, provider) {
     providerId: provider.id
   };
   if (stream.language) output.language = String(stream.language);
+  if (Array.isArray(stream.subtitles) && stream.subtitles.length) output.subtitles = stream.subtitles.slice();
   if (Number.isFinite(Number(stream.sizeBytes)) && Number(stream.sizeBytes) > 0) output.sizeBytes = Number(stream.sizeBytes);
   if (Number.isFinite(Number(stream.seeders)) && Number(stream.seeders) >= 0) output.seeders = Number(stream.seeders);
   return output;
