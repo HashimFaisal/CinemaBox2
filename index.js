@@ -953,7 +953,7 @@ function findEpisode(details, showId, seasonNumber, episodeNumber, deadline) {
       return (section.data || []).some(function (item) {
         if (String(item.card_type || '').toLowerCase() !== 'seasonposter' || !item.id) return false;
         var label = String(item.title || '').trim();
-        var match = label.match(/\\d+/);
+        var match = label.match(/\d+/);
         var number = /^specials?$/i.test(label) ? 0 : (match ? Number(match[0]) : null);
         if (number === seasonNumber) { seasonId = item.id; return true; }
         return false;
