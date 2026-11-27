@@ -62,3 +62,23 @@ test('does not query Internet Archive for TV episodes or mismatched titles', asy
   assert.deepEqual(await provider.getStreams({ type: 'movie', meta: {} }), []);
   assert.equal(calls, 0);
 });
+
+test('aborts a pending Internet Archive request at the provider deadline', async () => {
+  let aborted = false;
+  const provider = createInternetArchiveProvider({
+    fetch: async function (url, options) {
+      return new Promise(() => {
+        options.signal.addEventListener('abort', () => { aborted = true; });
+      });
+    }
+  });
+  await assert.rejects(
+    provider.getStreams({
+      type: 'movie',
+      meta: { name: 'Slow Archive Film' },
+      deadline: Date.now() + 30
+    }),
+    /request timeout/
+  );
+  assert.equal(aborted, true);
+});
