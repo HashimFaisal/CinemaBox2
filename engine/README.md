@@ -44,3 +44,12 @@ npm test
 ```
 
 For device comparison, use the same title, stream URL, resolution, network, and device. Record at least three cold starts per add-on and compare median source-fetch time and median Play-to-first-frame time. Also run a 10-minute uninterrupted playback check before treating any build as stable.
+
+
+## Subtitle-aware stream preference (beta)
+
+- Candidate versions are ranked by explicit provider metadata only: explicitly no hardcoded subtitles first, unknown status second, and explicitly hardcoded subtitles last.
+- Resolution is used as the tie-breaker within each subtitle-status group.
+- Missing metadata is always classified as unknown; the plugin does not infer hardcoded subtitles from the presence or absence of a separate subtitle track.
+- A separate subtitle track is preserved for Nuvio where the player API supplies one.
+- This preference cannot remove subtitles already burned into video pixels, and it cannot discover clean alternatives that the upstream API does not return.

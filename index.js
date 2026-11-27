@@ -1157,6 +1157,23 @@ function buildStream(video, displayTitle) {
   return output;
 }
 
+// Prefer a clean video only when the provider explicitly declares its hard-sub status.
+// Unknown metadata stays neutral; subtitle tracks are separate from burned-in pixels.
+function subtitlePreferenceRank(video) {
+  if (!video || typeof video !== 'object') return 1;
+  var keys = ['hardcoded_subtitles', 'hardcodedSubtitles', 'has_hardcoded_subtitles', 'hasHardcodedSubtitles', 'is_hardsub', 'isHardsub', 'hardsub'];
+  for (var i = 0; i < keys.length; i++) {
+    var value = video[keys[i]];
+    if (typeof value === 'boolean') return value ? 2 : 0;
+    if (typeof value === 'string') {
+      var normalized = value.trim().toLowerCase();
+      if (normalized === 'true' || normalized === 'yes' || normalized === '1') return 2;
+      if (normalized === 'false' || normalized === 'no' || normalized === '0') return 0;
+    }
+  }
+  return 1;
+}
+
 function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
   var timingStart = Date.now();
   var stageStart = timingStart;
@@ -1291,12 +1308,26 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
           'urlValid:', validUrl,
           'quality:', quality);
       });
+      var subtitlePreferenceCounts = { clean: 0, unknown: 0, hardcoded: 0 };
       uniqueStreamVideos(playerVideos).forEach(function (video) {
         var stream = buildStream(video, displayTitle);
         if (!stream) return;
+        var preferenceRank = subtitlePreferenceRank(video);
+        Object.defineProperty(stream, '_subtitlePreferenceRank', {
+          value: preferenceRank, enumerable: false, configurable: true
+        });
+        subtitlePreferenceCounts[preferenceRank === 0 ? 'clean' : (preferenceRank === 2 ? 'hardcoded' : 'unknown')] += 1;
         streams.push(stream);
         qualityCounts[stream.quality] = (qualityCounts[stream.quality] || 0) + 1;
       });
+      // Subtitle cleanliness takes precedence; resolution remains the tie-breaker.
+      // This does not inspect video pixels and never guesses when metadata is absent.
+      streams.sort(function (a, b) {
+        var subtitleRank = a._subtitlePreferenceRank - b._subtitlePreferenceRank;
+        if (subtitleRank) return subtitleRank;
+        return qualityRank(b.quality) - qualityRank(a.quality);
+      });
+      streams.forEach(function (stream) { delete stream._subtitlePreferenceRank; });
       if (subtitleTracks.length) {
         var safeSubtitles = subtitleTracks.filter(function (track) {
           var url = typeof track === 'string' ? track : track && (track.url || track.file);
@@ -1325,7 +1356,8 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
         rawVideos: playerVideos.length,
         validUniqueStreams: streams.length,
         qualities: rawQualities,
-        has2160p: has2160p
+        has2160p: has2160p,
+        subtitlePreference: subtitlePreferenceCounts
       }));
       if (playerVideos.length > 0 && streams.length === 0) {
         diagnostic('player', 'NO_VALID_STREAM_URLS', type, id);
