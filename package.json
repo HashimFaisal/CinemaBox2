@@ -1,8 +1,8 @@
 {
-  "name": "cinemabox-nuvio-plugin",
-  "version": "2.1.8",
+  "name": "cinemabox-beta-nuvio-plugin",
+  "version": "2.1.8-beta.1",
   "private": true,
-  "description": "CinemaBox scraper plugin for Nuvio",
+  "description": "Experimental CinemaBox Beta scraper plugin for Nuvio",
   "scripts": {
     "test": "node --test"
   },
