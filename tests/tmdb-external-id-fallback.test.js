@@ -8,7 +8,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
 
-test('TMDB series lookup retries dedicated external_ids endpoint when append response omits IMDb ID', async () => {
+test('TMDB title lookup skips a second IMDb request when append response omits IMDb ID', async () => {
   const calls = [];
   const sandbox = {
     URL,
@@ -44,6 +44,6 @@ test('TMDB series lookup retries dedicated external_ids endpoint when append res
   });
 
   assert.deepEqual(Array.from(streams), []);
-  assert.ok(calls.includes('api.themoviedb.org/3/tv/134362/external_ids'));
+  assert.ok(!calls.includes('api.themoviedb.org/3/tv/134362/external_ids'));
   assert.ok(calls.includes('cinema.albox.co/api/v4/search'));
 });
