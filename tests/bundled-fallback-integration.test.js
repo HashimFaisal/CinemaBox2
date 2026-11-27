@@ -108,3 +108,19 @@ test('bundled Nuvio entrypoint skips Internet Archive when CinemaBox returns a v
   assert.equal(result.streams[0].url, 'https://cdn.example.test/primary.mp4');
   assert.equal(result.calls.some(function (url) { return url.startsWith('https://archive.org/'); }), false);
 });
+
+test('bundled Nuvio entrypoint uses supplied metadata when TMDB lookup is unavailable', async function () {
+  const result = await runPlugin(function (url) {
+    if (url.startsWith('https://cinema.albox.co/api/v4/search?')) return response({ results: [] });
+    if (url.startsWith('https://api.themoviedb.org/')) throw new Error('TMDB must not be queried when Nuvio supplied metadata');
+    if (url.startsWith('https://archive.org/')) throw new Error('Internet Archive is disabled by default');
+    throw new Error('Unexpected URL in supplied-metadata test: ' + url);
+  }, {
+    tmdbId: '123456',
+    mediaType: 'movie',
+    meta: { name: 'Supplied Metadata Film', original_name: 'Supplied Metadata Film', year: '2020-01-01' }
+  });
+  assert.deepEqual(result.streams, []);
+  assert.equal(result.calls.some(function (url) { return url.startsWith('https://api.themoviedb.org/'); }), false);
+  assert.ok(result.calls.some(function (url) { return url.startsWith('https://cinema.albox.co/api/v4/search?'); }));
+});
