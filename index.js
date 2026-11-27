@@ -1486,10 +1486,39 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
       });
       var subtitlePreferenceCounts = { clean: 0, unknown: 0, hardcoded: 0 };
       var uniqueVideos = uniqueStreamVideos(playerVideos);
-      // Return playable source URLs immediately. Do not issue HEAD/Range requests
-      // before Nuvio receives the source list or starts playback.
+
+      // Probe up to the first three original video files concurrently. Wait no
+      // longer than 200ms for real MP4 dimensions; late probes continue filling
+      // the cache but never delay the source list beyond this short window.
+      var probeVideos = uniqueVideos.slice(0, 3);
+      var probeResults = await Promise.all(probeVideos.map(function (video) {
+        return new Promise(function (resolve) {
+          var settled = false;
+          var timer = setTimeout(function () {
+            if (settled) return;
+            settled = true;
+            resolve(null);
+          }, 200);
+          probeVideoSource(video.url, deadline).then(function (info) {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(info);
+          }, function () {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(null);
+          });
+        });
+      }));
+      var sourceInfoByUrl = new Map();
+      probeVideos.forEach(function (video, index) {
+        if (probeResults[index]) sourceInfoByUrl.set(video.url, probeResults[index]);
+      });
+
       uniqueVideos.forEach(function (video) {
-        var stream = buildStream(video, displayTitle, null);
+        var stream = buildStream(video, displayTitle, sourceInfoByUrl.get(video.url) || null);
         if (!stream) return;
         var preferenceRank = subtitlePreferenceRank(video);
         Object.defineProperty(stream, '_subtitlePreferenceRank', {
