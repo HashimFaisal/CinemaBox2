@@ -12,6 +12,7 @@ function loadInternals(fetchImpl, logger, timers) {
   const sandbox = {
     URL,
     AbortController,
+    AbortSignal,
     setTimeout: timers && typeof timers.setTimeout === 'function' ? timers.setTimeout : setTimeout,
     clearTimeout: timers && typeof timers.clearTimeout === 'function' ? timers.clearTimeout : clearTimeout,
     module: { exports: {} },
@@ -1363,4 +1364,21 @@ test('beta manifest is the single maintained experimental add-on identity', () =
   assert.equal(manifest.scrapers[0].id, 'cinemabox-beta');
   assert.equal(manifest.scrapers[0].name, 'CinemaBox Beta');
   assert.equal(fs.existsSync(experimentalManifestPath), false);
+});
+
+
+test('HTTP requests use the native AbortSignal deadline when the runtime supports it', async () => {
+  let receivedSignal;
+  const api = loadInternals(async function (url, options) {
+    receivedSignal = options && options.signal;
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ ok: true })
+    };
+  });
+  const deadline = Date.now() + 5000;
+  const payload = await api.request('https://cinema.albox.co/api/v4/search', deadline);
+  assert.deepEqual(payload, { ok: true });
+  assert.ok(receivedSignal instanceof AbortSignal);
 });
