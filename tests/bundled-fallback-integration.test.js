@@ -195,7 +195,7 @@ test('bundled entrypoint uses the dedicated season-player API and forwards suppl
   }
 });
 
-test('bundled entrypoint retries the secondary API host after primary host transport failure', async function () {
+test('beta entrypoint fails over after one retryable primary-host failure', async function () {
   const result = await runPlugin(function (url) {
     if (url.startsWith('https://cinema.albox.co/api/v4/search?')) {
       return Promise.resolve({
@@ -213,5 +213,8 @@ test('bundled entrypoint retries the secondary API host after primary host trans
   });
 
   assert.deepEqual(result.streams, []);
-  assert.ok(result.calls.some(url => url.startsWith('https://pucinema.albox.co/api/v4/search?')));
+  const primaryCalls = result.calls.filter(url => url.startsWith('https://cinema.albox.co/api/v4/search?'));
+  const fallbackCalls = result.calls.filter(url => url.startsWith('https://pucinema.albox.co/api/v4/search?'));
+  assert.equal(primaryCalls.length, 1, 'beta should not spend an extra retry round trip on a failed primary host');
+  assert.equal(fallbackCalls.length, 1, 'beta should try the configured fallback immediately');
 });
