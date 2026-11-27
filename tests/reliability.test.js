@@ -382,7 +382,7 @@ test('failed search pages reject instead of becoming a cached no-result', async 
 
   await assert.rejects(api.searchCinemaBox('The Matrix', 'movie'));
   await assert.rejects(api.searchCinemaBox('The Matrix', 'movie'));
-  assert.equal(calls, 6, 'each search should retry the primary host and try the configured secondary host');
+  assert.equal(calls, 4, 'each search should try the primary host once and then the configured secondary host once');
 });
 
 test('a genuine empty search result remains a valid cacheable no-result', async () => {
@@ -628,7 +628,7 @@ test('successful empty primary search uses original title only once', async () =
   });
 
   assert.deepEqual(Array.from(result.streams), []);
-  assert.equal(originalCalls, 3, 'the original-title lookup retries the primary host once and then tries the secondary host');
+  assert.equal(originalCalls, 2, 'the original-title lookup should fail over after one primary-host attempt');
 });
 
 test('missing initial season metadata forces an explicit season fetch', async () => {
