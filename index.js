@@ -1443,7 +1443,7 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
     failureStage = 'player';
     ensureBudget(deadline, 'player lookup');
     console.log('[FETCH TRACE] player-start', 'episode:', episodeId, 'at:', Date.now());
-    return getPlayer(episodeId, deadline).then(function (player) {
+    return getPlayer(episodeId, deadline).then(async function (player) {
       console.log('[FETCH TRACE] player-finish', 'elapsedMs:', Date.now() - stageStart);
       console.log('[TIMING] player:', Date.now() - stageStart, 'ms');
       var streams = [];
