@@ -1364,3 +1364,44 @@ test('official CinemaBox manifest is the single maintained add-on identity', () 
   assert.equal(manifest.scrapers[0].name, 'CinemaBox');
   assert.equal(fs.existsSync(experimentalManifestPath), false);
 });
+
+
+test('public Nuvio entry point resolves CinemaBox Library cbx IDs from supplied metadata', async () => {
+  const api = loadInternals(url => {
+    const value = String(url);
+    if (value.includes('/search?')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          results: [{ id: 'library-match-777', title: 'The Matrix', type: 'MOVIE', year: '1999' }]
+        }))
+      });
+    }
+    if (value.includes('/shows/shows/dynamic/library-match-777')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          post_info: { episode_id: 777001 }
+        }))
+      });
+    }
+    if (value.includes('/shows/episodes/player/777001')) {
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({
+          videos: [{ url: 'https://cdn.example/library-matrix.mp4', quality: '1080p' }]
+        }))
+      });
+    }
+    throw new Error('Unexpected URL: ' + value);
+  });
+
+  const streams = await api.getStreamsForNuvio({
+    id: 'cbx_777',
+    mediaType: 'movie',
+    meta: { id: 'cbx_777', type: 'movie', name: 'The Matrix', releaseInfo: '1999' }
+  });
+  assert.equal(streams.length, 1);
+  assert.equal(streams[0].url, 'https://cdn.example/library-matrix.mp4');
+  assert.equal(streams[0].quality, '1080p');
+});
