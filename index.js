@@ -1914,6 +1914,10 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
     }
     // Use metadata already supplied by Nuvio when TMDB authentication is unavailable.
     if (suppliedMeta) return run(null, suppliedMeta);
+    if (/^cbx_\d+$/i.test(rawId)) {
+      diagnostic('metadata', 'LIBRARY_META_REQUIRED', oldType, rawId);
+      return [];
+    }
     var tmdbStart = Date.now();
     ensureBudget(deadline, 'TMDB metadata');
     return getTmdbMetadata(rawId, rawType, deadline).then(function (resolved) {
