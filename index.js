@@ -1838,7 +1838,7 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
     function run(imdbId, meta) {
       // Prefer IMDb when available; otherwise preserve the TMDB identity so
       // fetchStreams can search by the title metadata without Cinemeta.
-      var id = imdbId || (/^cbx_\\d+$/i.test(rawId) ? rawId : 'tmdb:' + rawId);
+      var id = imdbId || (/^cbx_\d+$/i.test(rawId) ? rawId : 'tmdb:' + rawId);
       if (oldType === 'series') {
         if (args.season == null || args.episode == null) return [];
         id += ':' + Number(args.season) + ':' + Number(args.episode);
