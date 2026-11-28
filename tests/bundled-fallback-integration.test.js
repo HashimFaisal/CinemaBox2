@@ -180,7 +180,9 @@ test('bundled entrypoint uses the dedicated season-player API and forwards suppl
   assert.equal(result.streams.length, 1);
   assert.equal(result.streams[0].url, 'https://cdn.example.test/episode-101.mp4');
   assert.equal(result.streams[0].quality, '1080p');
-  assert.equal(result.streams[0].subtitles[0].language, 'en');
+  // The bundled Nuvio entrypoint intentionally exposes video fields only;
+  // subtitles returned by the upstream player API are not part of its output.
+  assert.equal(result.streams[0].subtitles, undefined);
   assert.ok(result.calls.some(url => url.endsWith('/shows/seasons/player/season-1')));
   assert.ok(result.calls.some(url => url.endsWith('/shows/episodes/player/episode-101')));
   for (const [key, value] of Object.entries({
