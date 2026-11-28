@@ -928,10 +928,20 @@ function parseExternalId(id) {
     };
   }
   match = value.match(/^tmdb:(\d+)(?::(\d+):(\d+))?$/i);
+  if (match) {
+    return {
+      imdbId: null,
+      tmdbId: match[1],
+      season: match[2] ? Number(match[2]) : null,
+      episode: match[3] ? Number(match[3]) : null
+    };
+  }
+  match = value.match(/^cbx_(\d+)(?::(\d+):(\d+))?$/i);
   if (!match) return null;
   return {
     imdbId: null,
-    tmdbId: match[1],
+    tmdbId: null,
+    sourceId: match[1],
     season: match[2] ? Number(match[2]) : null,
     episode: match[3] ? Number(match[3]) : null
   };
@@ -1158,6 +1168,7 @@ function fetchStreams(type, id, suppliedMeta, deadline, throwOnError) {
 
   var metaPromise = suppliedMeta
     ? Promise.resolve(suppliedMeta)
+    : external.sourceId ? Promise.resolve(null)
     : getExternalMeta(type, external.imdbId, deadline);
 
   return metaPromise.then(function (meta) {
@@ -1801,7 +1812,7 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
     requestHeadersByDeadline[deadline] = configureRequestHeaders(args);
     var rawType = String(args.mediaType || 'movie').toLowerCase();
     var oldType = rawType === 'tv' ? 'series' : rawType;
-    var rawId = String(args.tmdbId || '').replace(/^imdb:/i, '');
+    var rawId = String(args.tmdbId || args.id || '').replace(/^imdb:/i, '');
     // Error-level marker makes plugin invocation distinguishable from player-only logs.
     console.error('[CINEMABOX RUNTIME]', JSON.stringify({
       stage: 'start',
@@ -1827,7 +1838,7 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
     function run(imdbId, meta) {
       // Prefer IMDb when available; otherwise preserve the TMDB identity so
       // fetchStreams can search by the title metadata without Cinemeta.
-      var id = imdbId || ('tmdb:' + rawId);
+      var id = imdbId || (/^cbx_\\d+$/i.test(rawId) ? rawId : 'tmdb:' + rawId);
       if (oldType === 'series') {
         if (args.season == null || args.episode == null) return [];
         id += ':' + Number(args.season) + ':' + Number(args.episode);
@@ -1883,7 +1894,11 @@ function getStreamsForNuvio(input, mediaType, season, episode) {
     }
 
     var suppliedMeta = args.meta && typeof args.meta === 'object' &&
-      (args.meta.name || args.meta.title || args.meta.original_name) ? args.meta : null;
+      (args.meta.name || args.meta.title || args.meta.original_name) ? {
+        name: args.meta.name || args.meta.title || args.meta.original_name,
+        original_name: args.meta.original_name || args.meta.name || args.meta.title,
+        year: args.meta.year || args.meta.releaseInfo || args.meta.release_date || ''
+      } : null;
     if (!suppliedMeta && (args.title || args.name || args.originalTitle || args.original_name)) {
       suppliedMeta = {
         name: args.title || args.name || args.original_name || args.originalTitle,
